@@ -174,6 +174,18 @@ export type RunQueryFilters = {
  */
 export type StatusFacets = Partial<Record<NormalizedStatus, number>>;
 
+/**
+ * Counts for every filter dimension that offers them, each computed with its
+ * own dimension lifted. Networks are keyed by the chain id a run's steps
+ * recorded, and include chains a run merely touched: a filter offering only the
+ * chains that spent gas hides every chain the org reads on.
+ */
+export type RunFacets = {
+  statusCounts: StatusFacets;
+  networkCounts: Record<string, number>;
+  gasCounts: Partial<Record<GasSpend, number>>;
+};
+
 export type RunsFilters = RunQueryFilters & {
   range: TimeRange;
   cursor?: string;

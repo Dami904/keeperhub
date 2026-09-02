@@ -49,6 +49,7 @@ import type {
   GasSpend,
   NetworkBreakdown,
   NormalizedStatus,
+  RunFacets,
   RunQueryFilters,
   RunSource,
   StatusFacets,
@@ -1626,7 +1627,7 @@ END`;
  * status filter. Every other filter applies; the status filter itself does not,
  * so a count says how many runs ticking that status would bring in.
  */
-export function getStatusFacets(
+export function getRunFacets(
   organizationId: string,
   range: TimeRange,
   options: RunQueryFilters & {
@@ -1634,10 +1635,10 @@ export function getStatusFacets(
     customEnd?: string;
     projectId?: string;
   } = {}
-): Promise<StatusFacets> {
+): Promise<RunFacets> {
   const { customStart, customEnd, projectId, ...filters } = options;
   const compute = () =>
-    computeStatusFacets(
+    computeRunFacets(
       organizationId,
       range,
       filters,
@@ -1667,17 +1668,28 @@ function hasFilters(filters: RunQueryFilters): boolean {
   );
 }
 
-async function computeStatusFacets(
+async function computeRunFacets(
   organizationId: string,
   range: TimeRange,
   filters: RunQueryFilters,
   customStart?: string,
   customEnd?: string,
   projectId?: string
-): Promise<StatusFacets> {
+): Promise<RunFacets> {
   const rangeStart = getTimeRangeStart(range, customStart);
   const rangeEnd = customEnd ? new Date(customEnd) : new Date();
   const wanted = resolveSources(filters.sources, projectId);
+
+  const [networkCounts, gasCounts] = await Promise.all([
+    computeNetworkFacets(
+      organizationId,
+      rangeStart,
+      rangeEnd,
+      filters,
+      projectId
+    ),
+    computeGasFacets(organizationId, rangeStart, rangeEnd, filters, projectId),
+  ]);
 
   const workflowRows = wanted.workflow
     ? await db
@@ -1715,12 +1727,114 @@ async function computeStatusFacets(
         .groupBy(sql`1`)
     : [];
 
-  const facets: StatusFacets = {};
+  const statusCounts: StatusFacets = {};
   for (const row of [...workflowRows, ...directRows]) {
     const status = row.status as NormalizedStatus;
-    facets[status] = (facets[status] ?? 0) + (Number(row.value) || 0);
+    statusCounts[status] =
+      (statusCounts[status] ?? 0) + (Number(row.value) || 0);
   }
-  return facets;
+  return { statusCounts, networkCounts, gasCounts };
+}
+
+/**
+ * Distinct chains the window's runs touched, counted per run rather than per
+ * step. Deliberately not the gas breakdown: that one only counts steps that
+ * spent gas, so a chain the org only reads on - or one whose gas was never
+ * recorded - never appeared as an option to filter by.
+ */
+async function computeNetworkFacets(
+  organizationId: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+  filters: RunQueryFilters,
+  projectId?: string
+): Promise<Record<string, number>> {
+  const wanted = resolveSources(filters.sources, projectId);
+  const withoutNetworks: RunQueryFilters = { ...filters, networks: undefined };
+
+  const workflowRows = wanted.workflow
+    ? await db
+        .select({
+          network: workflowExecutionLogs.network,
+          value: sql<number>`COUNT(DISTINCT ${workflowExecutions.id})`,
+        })
+        .from(workflowExecutionLogs)
+        .innerJoin(
+          workflowExecutions,
+          eq(workflowExecutionLogs.executionId, workflowExecutions.id)
+        )
+        .innerJoin(workflows, eq(workflowExecutions.workflowId, workflows.id))
+        .where(
+          and(
+            eq(workflows.organizationId, organizationId),
+            projectId ? eq(workflows.projectId, projectId) : undefined,
+            gte(workflowExecutions.startedAt, rangeStart),
+            lt(workflowExecutions.startedAt, rangeEnd),
+            isNull(workflowExecutions.deletedAt),
+            isNotNull(workflowExecutionLogs.network),
+            ...workflowFilterConditions(withoutNetworks, rangeStart)
+          )
+        )
+        .groupBy(workflowExecutionLogs.network)
+    : [];
+
+  const directRows = wanted.direct
+    ? await db
+        .select({ network: directExecutions.network, value: count() })
+        .from(directExecutions)
+        .where(
+          and(
+            eq(directExecutions.organizationId, organizationId),
+            gte(directExecutions.createdAt, rangeStart),
+            lt(directExecutions.createdAt, rangeEnd),
+            isNotNull(directExecutions.network),
+            ...directFilterConditions(withoutNetworks)
+          )
+        )
+        .groupBy(directExecutions.network)
+    : [];
+
+  const counts: Record<string, number> = {};
+  for (const row of [...workflowRows, ...directRows]) {
+    if (!row.network) {
+      continue;
+    }
+    counts[row.network] = (counts[row.network] ?? 0) + (Number(row.value) || 0);
+  }
+  return counts;
+}
+
+/**
+ * How many runs sit in each gas bucket. Counted one bucket at a time because
+ * sponsored and wallet overlap, so a single grouped pass cannot express them.
+ */
+async function computeGasFacets(
+  organizationId: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+  filters: RunQueryFilters,
+  projectId?: string
+): Promise<Partial<Record<GasSpend, number>>> {
+  const withoutGas: RunQueryFilters = { ...filters, gas: undefined };
+  const values: GasSpend[] = ["sponsored", "wallet", "free"];
+
+  const totals = await Promise.all(
+    values.map((value) =>
+      getUnifiedRunsTotal(
+        organizationId,
+        rangeStart,
+        rangeEnd,
+        { ...withoutGas, gas: [value] },
+        projectId
+      )
+    )
+  );
+
+  const counts: Partial<Record<GasSpend, number>> = {};
+  for (const [index, value] of values.entries()) {
+    counts[value] = totals[index];
+  }
+  return counts;
 }
 
 async function getUnifiedRunsTotal(

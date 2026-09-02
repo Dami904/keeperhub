@@ -4,8 +4,8 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
   NormalizedStatus,
+  RunFacets,
   RunQueryFilters,
-  StatusFacets,
   UnifiedRun,
 } from "../../../lib/analytics/types";
 import {
@@ -111,11 +111,11 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     range: "7d",
     options?: RunQueryFilters & { limit?: number }
   ) => Promise<{ runs: UnifiedRun[]; total: number }>;
-  let getStatusFacets: (
+  let getRunFacets: (
     organizationId: string,
     range: "7d",
     options?: RunQueryFilters
-  ) => Promise<StatusFacets>;
+  ) => Promise<RunFacets>;
 
   async function cleanup(): Promise<void> {
     await queryClient`DELETE FROM workflow_execution_logs WHERE execution_id LIKE ${`${PREFIX}%`}`;
@@ -220,7 +220,7 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     }
     await db.insert(workflowExecutionLogs).values(logRows);
 
-    ({ getUnifiedRuns, getStatusFacets } = await import(
+    ({ getUnifiedRuns, getRunFacets } = await import(
       "@/lib/analytics/queries"
     ));
   });
@@ -317,8 +317,24 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     expect(total).toBe(3);
   });
 
+  it("offers every chain a run touched, not only the ones that spent gas", async () => {
+    const { networkCounts } = await getRunFacets(ORG_ID, "7d");
+    // The seeded runs record a chain on their step but no gas on most of them.
+    // Sourcing the options from the gas breakdown dropped exactly those.
+    expect(Object.keys(networkCounts).sort()).toEqual([ARBITRUM, BASE].sort());
+    expect(networkCounts[BASE]).toBeGreaterThan(0);
+    expect(networkCounts[ARBITRUM]).toBeGreaterThan(0);
+  });
+
+  it("counts each gas bucket, including the empty ones", async () => {
+    const { gasCounts } = await getRunFacets(ORG_ID, "7d");
+    expect(gasCounts.sponsored).toBe(1);
+    expect(gasCounts.wallet).toBe(1);
+    expect(gasCounts.free).toBeGreaterThan(0);
+  });
+
   it("counts each status separately for the filter's counts", async () => {
-    const facets = await getStatusFacets(ORG_ID, "7d");
+    const { statusCounts: facets } = await getRunFacets(ORG_ID, "7d");
     expect(facets.error).toBe(1);
     expect(facets.external_error).toBe(1);
     expect(facets.system_error).toBe(1);
@@ -328,7 +344,7 @@ describe.skipIf(SKIP)("analytics run filters", () => {
   });
 
   it("counts under the other filters but not under the status filter", async () => {
-    const facets = await getStatusFacets(ORG_ID, "7d", {
+    const { statusCounts: facets } = await getRunFacets(ORG_ID, "7d", {
       networks: [ARBITRUM],
       statuses: ["success"],
     });

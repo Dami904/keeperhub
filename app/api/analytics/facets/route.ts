@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { parseRunFilters } from "@/lib/analytics/parse-run-filters";
-import { getStatusFacets } from "@/lib/analytics/queries";
+import { getRunFacets } from "@/lib/analytics/queries";
 import { parseTimeRange } from "@/lib/analytics/time-range";
 import { apiError } from "@/lib/api-error";
 import { SCOPE_MCP_READ } from "@/lib/mcp/oauth-scopes";
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   try {
     const params = req.nextUrl.searchParams;
-    const statusCounts = await getStatusFacets(
+    const facets = await getRunFacets(
       authCtx.organizationId,
       parseTimeRange(params.get("range")),
       {
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest): Promise<Response> {
         ...parseRunFilters(params),
       }
     );
-    return NextResponse.json({ statusCounts });
+    return NextResponse.json(facets);
   } catch (error: unknown) {
     return apiError(error, "Failed to fetch analytics facets");
   }

@@ -10,7 +10,7 @@ import {
 import type {
   AnalyticsSummary,
   NetworkBreakdown,
-  StatusFacets,
+  RunFacets,
   TimeSeriesBucket,
 } from "@/lib/analytics/types";
 import {
@@ -18,6 +18,7 @@ import {
   analyticsCustomStartAtom,
   analyticsDurationFilterAtom,
   analyticsErrorAtom,
+  analyticsFacetsAtom,
   analyticsGasFiltersAtom,
   analyticsLastUpdatedAtom,
   analyticsLoadingAtom,
@@ -28,7 +29,6 @@ import {
   analyticsRunsAtom,
   analyticsSearchAtom,
   analyticsSourceFiltersAtom,
-  analyticsStatusFacetsAtom,
   analyticsStatusFiltersAtom,
   analyticsSummaryAtom,
   analyticsTimeSeriesAtom,
@@ -111,7 +111,7 @@ export function useAnalytics(): UseAnalyticsReturn {
   const setTimeSeries = useSetAtom(analyticsTimeSeriesAtom);
   const setNetworks = useSetAtom(analyticsNetworksAtom);
   const setRuns = useSetAtom(analyticsRunsAtom);
-  const setStatusFacets = useSetAtom(analyticsStatusFacetsAtom);
+  const setFacets = useSetAtom(analyticsFacetsAtom);
   const setLastUpdated = useSetAtom(analyticsLastUpdatedAtom);
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -250,14 +250,9 @@ export function useAnalytics(): UseAnalyticsReturn {
         })
       ),
       wrapSection(
-        processSection<{ statusCounts: StatusFacets }>(
-          facetsPromise,
-          "Facets",
-          ctx,
-          (data) => {
-            setStatusFacets(data.statusCounts);
-          }
-        )
+        processSection<RunFacets>(facetsPromise, "Facets", ctx, (data) => {
+          setFacets(data);
+        })
       ),
     ]);
   }, [
@@ -278,7 +273,7 @@ export function useAnalytics(): UseAnalyticsReturn {
     setTimeSeries,
     setNetworks,
     setRuns,
-    setStatusFacets,
+    setFacets,
     setLastUpdated,
   ]);
 
