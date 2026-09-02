@@ -165,6 +165,7 @@ address a wallet user signed in with - see
 |---|---|---|
 | 0G | `16661` | experimental |
 | 0G Galileo (testnet) | `16602` | experimental |
+| Arc Testnet (Circle) | `5042002` | experimental |
 
 The live source of truth for chains is `GET /api/chains`; agents can read the
 same list (including per-chain `status`) from the `list_action_schemas` MCP

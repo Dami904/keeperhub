@@ -28,6 +28,15 @@ export type BuildWithdrawableAssetsInput = {
 };
 
 const TEMPO_CHAIN_IDS: ReadonlySet<number> = new Set([42_431, 4217]);
+
+// Chains where the native gas balance and a supported_tokens row represent
+// the same underlying balance at two different decimal precisions (e.g. Arc's
+// native USDC at 18 decimals vs. its ERC-20 interface at 6 decimals). Listing
+// both as separate withdrawable assets double-counts the balance.
+const NATIVE_MIRRORS_TOKEN_CHAIN_IDS: ReadonlySet<number> = new Set([
+  ...TEMPO_CHAIN_IDS,
+  5_042_002, // Arc Testnet (Circle)
+]);
 const DEFAULT_STABLECOIN_DECIMALS = 6;
 
 function hasPositiveBalance(raw: string): boolean {
@@ -40,7 +49,7 @@ function collectNativeAssets(
 ): WithdrawableAsset[] {
   const assets: WithdrawableAsset[] = [];
   for (const balance of input.balances) {
-    if (TEMPO_CHAIN_IDS.has(balance.chainId)) {
+    if (NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(balance.chainId)) {
       continue;
     }
     const chain = input.chains.find((c) => c.chainId === balance.chainId);

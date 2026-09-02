@@ -1,19 +1,33 @@
 // TEMPO uses stablecoins for gas, so we display stablecoins only (no native token)
 const TEMPO_CHAIN_IDS: ReadonlySet<number> = new Set([42_431, 4217]);
 
+// Chains where the native gas balance and a supported_tokens row represent
+// the same underlying balance at two different decimal precisions (e.g. Arc's
+// native USDC at 18 decimals vs. its ERC-20 interface at 6). Showing both
+// double-counts the balance in the wallet UI, so these chains suppress the
+// native row/withdraw action the same way Tempo does.
+const NATIVE_MIRRORS_TOKEN_CHAIN_IDS: ReadonlySet<number> = new Set([
+  ...TEMPO_CHAIN_IDS,
+  5_042_002, // Arc Testnet (Circle)
+]);
+
 // Chains whose token lineup doesn't mirror Ethereum mainnet's stablecoin set
 // (e.g. Plasma ships USDT0, no Circle USDC, no Sky USDS). For these chains we
 // render the chain's own supported_tokens rows directly instead of overlaying
 // them on the mainnet master list, which would otherwise produce misleading
 // "Not available" entries for assets that simply don't exist on the chain.
 const INDEPENDENT_TOKEN_LIST_CHAIN_IDS: ReadonlySet<number> = new Set([
-  42_431, 4217, 9745,
+  42_431, 4217, 9745, 5_042_002,
 ]);
 
 export const MAINNET_CHAIN_ID = 1;
 
 export function isTempoChain(chainId: number): boolean {
   return TEMPO_CHAIN_IDS.has(chainId);
+}
+
+export function nativeMirrorsSupportedToken(chainId: number): boolean {
+  return NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(chainId);
 }
 
 export function hasIndependentTokenList(chainId: number): boolean {

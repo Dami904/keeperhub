@@ -653,7 +653,6 @@ const DEFAULT_CHAINS: NewChain[] = [
     status: "experimental",
     usePrivateMempoolRpc: getUsePrivateMempoolRpc({ rpcConfig, jsonKey: "arc-testnet" }),
     defaultPrivateRpcUrl: getPrivateRpcUrl({ rpcConfig, jsonKey: "arc-testnet" }),
-    aliases: ["arc"],
   },
 ];
 
