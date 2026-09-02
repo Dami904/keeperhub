@@ -832,16 +832,18 @@ const web3Plugin: IntegrationPlugin = {
       outputFields: [
         {
           field: "success",
-          description: "Whether the contract call succeeded",
+          description:
+            "Whether the contract call succeeded. Also true when failOnError is off and a failed read (RPC error or revert) was softened; check `error` to tell them apart.",
         },
         {
           field: "result",
           description:
-            "The contract function return value (structured based on ABI outputs)",
+            "The contract function return value (structured based on ABI outputs). Null on a soft-failed (failOnError=false) read.",
         },
         {
           field: "error",
-          description: "Error message if the call failed",
+          description:
+            "Error message if the call failed. Also set when failOnError is off and a failed read was softened into success=true. Match this string in a downstream Condition node (contains/matchesRegex) to filter known errors from ones that should alert.",
         },
       ],
       configFields: [
@@ -871,6 +873,14 @@ const web3Plugin: IntegrationPlugin = {
           type: "abi-function-args",
           abiField: "abi",
           abiFunctionField: "abiFunction",
+        },
+        {
+          key: "failOnError",
+          label: "Fail workflow on error",
+          type: "fail-on-error-switch",
+          defaultValue: "true",
+          helpTip:
+            "When off, a failed read (RPC error or a reverting call) passes a soft error to the next node instead of failing the run, so one bad item in a For Each loop does not abort it. Config/validation problems (bad ABI, missing function, unresolved RPC) always fail the run regardless of this setting.",
         },
       ],
     },

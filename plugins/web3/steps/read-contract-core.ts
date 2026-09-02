@@ -15,8 +15,9 @@ import { validateArgsForAbi } from "@/lib/abi/validate-args";
 import { ErrorCategory, logUserError } from "@/lib/logging";
 import { getChainIdFromNetwork } from "@/lib/rpc/network-utils";
 import { getRpcProvider } from "@/lib/rpc/provider-factory";
+import { redactAllUrls } from "@/lib/rpc/scrub-rpc-urls";
 import { findAbiFunction } from "@/lib/abi/utils";
-import { getErrorMessage } from "@/lib/utils";
+import { getErrorMessage, resolveFailOnError } from "@/lib/utils";
 import { getAbiFunctionKey } from "@/lib/abi/function-key";
 import { getChainAdapter } from "@/lib/web3/chain-adapter";
 import { formatContractError } from "@/lib/web3/decode-revert-error";
@@ -31,11 +32,27 @@ export type ReadContractCoreInput = {
   abi: string;
   abiFunction: string;
   functionArgs?: string;
+  // Mirrors HTTP Request's failOnError. Defaults to true. When false, a failed
+  // read attempt (RPC transport error, revert) is softened into a success
+  // carrying `error` instead of failing the step, so one bad call inside a For
+  // Each loop does not abort the run. Only the read attempt itself is
+  // softened: config problems (bad ABI/args/address/network, unresolved RPC)
+  // would recur on every run, so they hard-fail regardless of this flag,
+  // mirroring HTTP Request's SSRF/malformed-URL carve-out.
+  failOnError?: boolean;
   _context?: { executionId?: string; organizationId?: string };
 };
 
 export type ReadContractResult =
-  | { success: true; result: unknown; addressLink: string }
+  | {
+      success: true;
+      result: unknown;
+      addressLink: string;
+      // Present only when failOnError=false softened a failed read into a
+      // success value so the workflow continues. Absent on a genuine read;
+      // `result` is null when it is set.
+      error?: string;
+    }
   | { success: false; error: string; errorClass?: ExecutionErrorType };
 
 /**
@@ -276,9 +293,22 @@ export async function readContractCore(
         chain_id: String(chainId),
       }
     );
+    const message = formatContractError(error, contractInterface);
+    if (!resolveFailOnError(input.failOnError)) {
+      // Soft-fail: hand the error to the next node instead of failing the
+      // step. Every web3 URL is an RPC provider endpoint, and withStepLogging
+      // only redacts the success:false branch, so the redaction that a hard
+      // failure would get downstream has to happen here.
+      return {
+        success: true,
+        result: null,
+        addressLink: await adapter.getAddressUrl(contractAddress),
+        error: redactAllUrls(message),
+      };
+    }
     return {
       success: false,
-      error: formatContractError(error, contractInterface),
+      error: message,
       errorClass: ExecutionErrorType.USER,
     };
   }
