@@ -75,10 +75,7 @@ function collectNativeAssets(
   const assets: WithdrawableAsset[] = [];
   for (const balance of input.balances) {
     if (
-      nativeMirrorsSupportedToken(
-        balance.chainId,
-        input.supportedTokenBalances
-      )
+      nativeMirrorsSupportedToken(balance.chainId, input.supportedTokenBalances)
     ) {
       continue;
     }
