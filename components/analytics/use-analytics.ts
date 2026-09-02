@@ -151,7 +151,14 @@ export function useAnalytics(): UseAnalyticsReturn {
     const runsQuery = buildRunsQuery(filters);
     // The status counts sit under every filter except status itself, so the
     // facets request carries the same query with that one dimension lifted.
-    const facetsQuery = buildRunsQuery({ ...filters, omitStatus: true });
+    // Status only. The network and gas counts read the step logs, and this
+    // request repeats every poll for every open dashboard, so they are fetched
+    // when their dropdown opens instead.
+    const facetsQuery = buildRunsQuery({
+      ...filters,
+      omitStatus: true,
+      dimensions: ["status"],
+    });
 
     const { signal } = controller;
 
@@ -251,7 +258,9 @@ export function useAnalytics(): UseAnalyticsReturn {
       ),
       wrapSection(
         processSection<RunFacets>(facetsPromise, "Facets", ctx, (data) => {
-          setFacets(data);
+          // Merge: this response carries status only, and replacing would drop
+          // whichever step-log counts a dropdown had already loaded.
+          setFacets((current) => ({ ...current, ...data }));
         })
       ),
     ]);

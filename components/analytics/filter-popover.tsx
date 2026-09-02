@@ -19,6 +19,8 @@ type FilterPopoverProps = {
   onClear: () => void;
   /** Omitted by a single-choice dimension, which has nothing to select all of. */
   onSelectAll?: () => void;
+  /** Fired when the panel opens, for counts too expensive to load eagerly. */
+  onOpen?: () => void;
   children: ReactNode;
 };
 

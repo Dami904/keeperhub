@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
+  FacetDimension,
   NormalizedStatus,
   RunFacets,
   RunQueryFilters,
@@ -128,7 +129,7 @@ describe.skipIf(SKIP)("analytics run filters", () => {
   let getRunFacets: (
     organizationId: string,
     range: "7d",
-    options?: RunQueryFilters
+    options?: RunQueryFilters & { dimensions?: FacetDimension[] }
   ) => Promise<RunFacets>;
 
   async function cleanup(): Promise<void> {
@@ -387,11 +388,13 @@ describe.skipIf(SKIP)("analytics run filters", () => {
 
     // Isolation runs both ways: the neighbour sees only its own run, and its
     // run never inflates this org's counts.
-    const neighbour = await getRunFacets(OTHER_ORG_ID, "7d");
+    const neighbour = await getRunFacets(OTHER_ORG_ID, "7d", {
+      dimensions: ["network", "gas"],
+    });
     expect(neighbour.networkCounts).toEqual({ [BASE]: 1 });
     expect(neighbour.gasCounts.wallet).toBe(1);
 
-    const mine = await getRunFacets(ORG_ID, "7d");
+    const mine = await getRunFacets(ORG_ID, "7d", { dimensions: ["network"] });
     const myBaseRuns = await idsFor({ networks: [BASE] });
     expect(mine.networkCounts[BASE]).toBe(myBaseRuns.length);
     expect(myBaseRuns).not.toContain(`${PREFIX}other_run`);
@@ -406,7 +409,9 @@ describe.skipIf(SKIP)("analytics run filters", () => {
   });
 
   it("offers every chain a run touched, not only the ones that spent gas", async () => {
-    const { networkCounts } = await getRunFacets(ORG_ID, "7d");
+    const { networkCounts } = await getRunFacets(ORG_ID, "7d", {
+      dimensions: ["network"],
+    });
     // The seeded runs record a chain on their step but no gas on most of them.
     // Sourcing the options from the gas breakdown dropped exactly those.
     // Optimism is only in the JSONB. Listing options from the denormalised
@@ -419,15 +424,37 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     expect(networkCounts[OPTIMISM]).toBe(1);
   });
 
+  // The dashboard polls facets every ten seconds for every open tab. Network
+  // and gas both read the step logs, so a default that included them would put
+  // that table back under exactly the load that took prod down.
+  it("counts only statuses unless the costly dimensions are asked for", async () => {
+    const polled = await getRunFacets(ORG_ID, "7d");
+    expect(Object.keys(polled.statusCounts).length).toBeGreaterThan(0);
+    expect(polled.networkCounts).toEqual({});
+    expect(polled.gasCounts).toEqual({});
+
+    const onDemand = await getRunFacets(ORG_ID, "7d", {
+      dimensions: ["network"],
+    });
+    expect(Object.keys(onDemand.networkCounts).length).toBeGreaterThan(0);
+    // And asking for one does not silently drag the others along.
+    expect(onDemand.gasCounts).toEqual({});
+    expect(onDemand.statusCounts).toEqual({});
+  });
+
   it("counts each gas bucket, including the empty ones", async () => {
-    const { gasCounts } = await getRunFacets(ORG_ID, "7d");
+    const { gasCounts } = await getRunFacets(ORG_ID, "7d", {
+      dimensions: ["gas"],
+    });
     expect(gasCounts.sponsored).toBe(1);
     expect(gasCounts.wallet).toBe(2);
     expect(gasCounts.free).toBeGreaterThan(0);
   });
 
   it("counts each status separately for the filter's counts", async () => {
-    const { statusCounts: facets } = await getRunFacets(ORG_ID, "7d");
+    const { statusCounts: facets } = await getRunFacets(ORG_ID, "7d", {
+      dimensions: ["status"],
+    });
     expect(facets.error).toBe(1);
     expect(facets.external_error).toBe(1);
     expect(facets.system_error).toBe(1);
@@ -438,6 +465,7 @@ describe.skipIf(SKIP)("analytics run filters", () => {
 
   it("counts under the other filters but not under the status filter", async () => {
     const { statusCounts: facets } = await getRunFacets(ORG_ID, "7d", {
+      dimensions: ["status"],
       networks: [ARBITRUM],
       statuses: ["success"],
     });

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { parseRunFilters } from "@/lib/analytics/parse-run-filters";
 import { getRunFacets } from "@/lib/analytics/queries";
 import { parseTimeRange } from "@/lib/analytics/time-range";
+import type { FacetDimension } from "@/lib/analytics/types";
 import { apiError } from "@/lib/api-error";
 import { SCOPE_MCP_READ } from "@/lib/mcp/oauth-scopes";
 import { resolveOrganizationId } from "@/lib/middleware/auth-helpers";
@@ -30,6 +31,14 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   try {
     const params = req.nextUrl.searchParams;
+    // Explicit, and status-only by default: the dashboard's poll must never
+    // pull the step-log counts by accident.
+    const valid = new Set<FacetDimension>(["status", "network", "gas"]);
+    const dimensions = params
+      .getAll("dimension")
+      .filter((value): value is FacetDimension =>
+        valid.has(value as FacetDimension)
+      );
     const facets = await getRunFacets(
       authCtx.organizationId,
       parseTimeRange(params.get("range")),
@@ -37,6 +46,7 @@ export async function GET(req: NextRequest): Promise<Response> {
         customStart: params.get("customStart") ?? undefined,
         customEnd: params.get("customEnd") ?? undefined,
         projectId: params.get("projectId") ?? undefined,
+        ...(dimensions.length > 0 ? { dimensions } : {}),
         ...parseRunFilters(params),
       }
     );

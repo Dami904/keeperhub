@@ -186,6 +186,15 @@ export type RunFacets = {
   gasCounts: Partial<Record<GasSpend, number>>;
 };
 
+/**
+ * Which counts a facets request wants. They are not equally cheap: status
+ * counts group `workflow_executions` alone, while network and gas both reach
+ * into the step logs - network to decode a chain out of JSONB, gas to run one
+ * count per bucket. Only status is cheap enough to ride the dashboard's poll;
+ * the other two are asked for when their dropdown is opened.
+ */
+export type FacetDimension = "status" | "network" | "gas";
+
 export type RunsFilters = RunQueryFilters & {
   range: TimeRange;
   cursor?: string;

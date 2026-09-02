@@ -31,6 +31,7 @@ import {
   useChainDisplay,
 } from "@/lib/hooks/use-chain-display";
 import { FilterCheckbox, FilterPopover, FilterRadio } from "./filter-popover";
+import { useLazyFacet } from "./use-lazy-facet";
 
 type StatusGroup = {
   key: string;
@@ -205,6 +206,7 @@ function SourceFilter(): ReactNode {
 function NetworkFilter(): ReactNode {
   const [networks, setNetworks] = useAtom(analyticsNetworkFiltersAtom);
   const counts = useAtomValue(analyticsFacetsAtom).networkCounts;
+  const loadCounts = useLazyFacet("network");
   const chains = useChainDisplay();
   const clear = useCallback((): void => setNetworks([]), [setNetworks]);
 
@@ -234,6 +236,7 @@ function NetworkFilter(): ReactNode {
     <FilterPopover
       label="Network"
       onClear={clear}
+      onOpen={loadCounts}
       onSelectAll={options.length > 0 ? selectAll : undefined}
       selectedCount={networks.length}
     >
@@ -288,6 +291,7 @@ const ALL_GAS: GasSpend[] = GAS_GROUPS.flatMap((group) =>
 function GasFilter(): ReactNode {
   const [gas, setGas] = useAtom(analyticsGasFiltersAtom);
   const counts = useAtomValue(analyticsFacetsAtom).gasCounts;
+  const loadCounts = useLazyFacet("gas");
   const clear = useCallback((): void => setGas([]), [setGas]);
   const selectAll = useCallback((): void => setGas(ALL_GAS), [setGas]);
 
@@ -308,6 +312,7 @@ function GasFilter(): ReactNode {
     <FilterPopover
       label="Gas"
       onClear={clear}
+      onOpen={loadCounts}
       onSelectAll={selectAll}
       selectedCount={gas.length}
     >

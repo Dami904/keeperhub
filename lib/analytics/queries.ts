@@ -46,6 +46,7 @@ import {
 } from "./time-range";
 import type {
   AnalyticsSummary,
+  FacetDimension,
   GasSpend,
   NetworkBreakdown,
   NormalizedStatus,
@@ -1699,14 +1700,18 @@ export function getRunFacets(
     customStart?: string;
     customEnd?: string;
     projectId?: string;
+    /** Which counts to compute; only status is cheap enough to poll for. */
+    dimensions?: FacetDimension[];
   } = {}
 ): Promise<RunFacets> {
-  const { customStart, customEnd, projectId, ...filters } = options;
+  const { customStart, customEnd, projectId, dimensions, ...filters } = options;
+  const wanted = new Set<FacetDimension>(dimensions ?? ["status"]);
   const compute = () =>
     computeRunFacets(
       organizationId,
       range,
       filters,
+      wanted,
       customStart,
       customEnd,
       projectId
@@ -1717,7 +1722,12 @@ export function getRunFacets(
     return compute();
   }
   return cachedAnalytics(
-    analyticsCacheKey("facets", [organizationId, range, projectId]),
+    analyticsCacheKey("facets", [
+      organizationId,
+      range,
+      projectId,
+      [...wanted].sort().join("+"),
+    ]),
     compute
   );
 }
@@ -1737,6 +1747,7 @@ async function computeRunFacets(
   organizationId: string,
   range: TimeRange,
   filters: RunQueryFilters,
+  dimensions: Set<FacetDimension>,
   customStart?: string,
   customEnd?: string,
   projectId?: string
@@ -1745,56 +1756,70 @@ async function computeRunFacets(
   const rangeEnd = customEnd ? new Date(customEnd) : new Date();
   const wanted = resolveSources(filters.sources, projectId);
 
+  // Both of these read the step logs, the table that took prod down when the
+  // run filters walked it too eagerly, so neither is computed unless asked for.
   const [networkCounts, gasCounts] = await Promise.all([
-    computeNetworkFacets(
-      organizationId,
-      rangeStart,
-      rangeEnd,
-      filters,
-      projectId
-    ),
-    computeGasFacets(organizationId, rangeStart, rangeEnd, filters, projectId),
+    dimensions.has("network")
+      ? computeNetworkFacets(
+          organizationId,
+          rangeStart,
+          rangeEnd,
+          filters,
+          projectId
+        )
+      : {},
+    dimensions.has("gas")
+      ? computeGasFacets(
+          organizationId,
+          rangeStart,
+          rangeEnd,
+          filters,
+          projectId
+        )
+      : {},
   ]);
 
-  const workflowRows = wanted.workflow
-    ? await db
-        .select({ status: workflowNormalizedStatus, value: count() })
-        .from(workflowExecutions)
-        .innerJoin(workflows, eq(workflowExecutions.workflowId, workflows.id))
-        .where(
-          and(
-            eq(workflows.organizationId, organizationId),
-            projectId ? eq(workflows.projectId, projectId) : undefined,
-            gte(workflowExecutions.startedAt, rangeStart),
-            lt(workflowExecutions.startedAt, rangeEnd),
-            isNull(workflowExecutions.deletedAt),
-            ...workflowFilterConditions(
-              filters,
-              { organizationId, rangeStart, rangeEnd, projectId },
-              true
+  const workflowRows =
+    wanted.workflow && dimensions.has("status")
+      ? await db
+          .select({ status: workflowNormalizedStatus, value: count() })
+          .from(workflowExecutions)
+          .innerJoin(workflows, eq(workflowExecutions.workflowId, workflows.id))
+          .where(
+            and(
+              eq(workflows.organizationId, organizationId),
+              projectId ? eq(workflows.projectId, projectId) : undefined,
+              gte(workflowExecutions.startedAt, rangeStart),
+              lt(workflowExecutions.startedAt, rangeEnd),
+              isNull(workflowExecutions.deletedAt),
+              ...workflowFilterConditions(
+                filters,
+                { organizationId, rangeStart, rangeEnd, projectId },
+                true
+              )
             )
           )
-        )
-        // Group by the select ordinal: the CASE carries a bound parameter, and
-        // repeating the expression here would bind a second placeholder that
-        // Postgres does not recognise as the same expression.
-        .groupBy(sql`1`)
-    : [];
+          // Group by the select ordinal: the CASE carries a bound parameter, and
+          // repeating the expression here would bind a second placeholder that
+          // Postgres does not recognise as the same expression.
+          .groupBy(sql`1`)
+      : [];
 
-  const directRows = wanted.direct
-    ? await db
-        .select({ status: directNormalizedStatus, value: count() })
-        .from(directExecutions)
-        .where(
-          and(
-            eq(directExecutions.organizationId, organizationId),
-            gte(directExecutions.createdAt, rangeStart),
-            lt(directExecutions.createdAt, rangeEnd),
-            ...directFilterConditions(filters, true)
+  const directRows =
+    wanted.direct && dimensions.has("status")
+      ? await db
+          .select({ status: directNormalizedStatus, value: count() })
+          .from(directExecutions)
+          .where(
+            and(
+              eq(directExecutions.organizationId, organizationId),
+              gte(directExecutions.createdAt, rangeStart),
+              lt(directExecutions.createdAt, rangeEnd),
+              ...directFilterConditions(filters, true)
+            )
           )
-        )
-        .groupBy(sql`1`)
-    : [];
+          .groupBy(sql`1`)
+      : [];
 
   const statusCounts: StatusFacets = {};
   for (const row of [...workflowRows, ...directRows]) {
