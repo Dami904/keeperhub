@@ -38,6 +38,8 @@ const REBALANCE_ID = `${PREFIX}wf_rebalance`;
 const BASE = "8453";
 const ARBITRUM = "42161";
 const OPTIMISM = "10";
+// A neighbour whose rows must never appear in the org under test.
+const OTHER_ORG_ID = `${PREFIX}org_other`;
 
 type Seed = {
   id: string;
@@ -187,6 +189,42 @@ describe.skipIf(SKIP)("analytics run filters", () => {
       },
     ]);
 
+    await db.insert(organization).values({
+      id: OTHER_ORG_ID,
+      name: "other org",
+      slug: OTHER_ORG_ID,
+      createdAt: now,
+    });
+    await db.insert(workflows).values({
+      id: `${PREFIX}wf_other`,
+      name: "Neighbour workflow",
+      userId: USER_ID,
+      organizationId: OTHER_ORG_ID,
+      enabled: true,
+      nodes: [],
+      edges: [],
+    });
+    await db.insert(workflowExecutions).values({
+      id: `${PREFIX}other_run`,
+      workflowId: `${PREFIX}wf_other`,
+      userId: USER_ID,
+      status: "success",
+      duration: "1000",
+      startedAt: now,
+      completedAt: now,
+    });
+    await db.insert(workflowExecutionLogs).values({
+      id: `${PREFIX}other_log`,
+      executionId: `${PREFIX}other_run`,
+      nodeId: "n1",
+      nodeName: "Step",
+      nodeType: "web3/transfer",
+      status: "success",
+      network: BASE,
+      gasUsedWei: "99999",
+      startedAt: now,
+    });
+
     await db.insert(workflowExecutions).values(
       SEEDS.map((seed) => ({
         id: seed.id,
@@ -330,6 +368,33 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     expect(await idsFor({ gas: ["sponsored", "wallet", "free"] })).toEqual(
       await idsFor({})
     );
+  });
+
+  // Results were never wrong here - the outer query is org-scoped, so a
+  // neighbour's rows could not appear. What the subqueries lacked was a bound
+  // of their own, so they aggregated every tenant's step logs, and paid the
+  // JSONB decode on all of them, before the outer filter threw the work away.
+  // This guards the half that is observable from the outside.
+  it("keeps one organization's runs and counts to itself", async () => {
+    for (const filters of [
+      { gas: ["wallet"] as const },
+      { gas: ["sponsored"] as const },
+      { networks: [BASE] },
+    ]) {
+      const ids = await idsFor(filters as RunQueryFilters);
+      expect(ids.every((id) => id.startsWith(PREFIX))).toBe(true);
+    }
+
+    // Isolation runs both ways: the neighbour sees only its own run, and its
+    // run never inflates this org's counts.
+    const neighbour = await getRunFacets(OTHER_ORG_ID, "7d");
+    expect(neighbour.networkCounts).toEqual({ [BASE]: 1 });
+    expect(neighbour.gasCounts.wallet).toBe(1);
+
+    const mine = await getRunFacets(ORG_ID, "7d");
+    const myBaseRuns = await idsFor({ networks: [BASE] });
+    expect(mine.networkCounts[BASE]).toBe(myBaseRuns.length);
+    expect(myBaseRuns).not.toContain(`${PREFIX}other_run`);
   });
 
   it("reports the total under the filters, not the unfiltered count", async () => {

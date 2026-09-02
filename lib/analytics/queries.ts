@@ -187,11 +187,10 @@ function directStatusesCondition(statuses: NormalizedStatus[]): SQL {
  * same COALESCE(column, JSONB) the listing reads them through. EXISTS keeps a
  * run that touched any selected chain without multiplying it per matching step.
  */
-function workflowNetworkCondition(networks: string[], logsFrom: Date): SQL {
+function workflowNetworkCondition(networks: string[], scope: LogScope): SQL {
   return sql`${workflowExecutions.id} IN (
     SELECT ${workflowExecutionLogs.executionId}
-      FROM ${workflowExecutionLogs}
-     WHERE ${gte(workflowExecutionLogs.startedAt, logsFrom)}
+    ${scopedLogs(scope)}
        AND ${stepNetwork} IN (${sql.join(
          networks.map((network) => sql`${network}`),
          sql`, `
@@ -245,6 +244,45 @@ const filterStepSponsored = sql`${workflowExecutionLogs.outputRaw}->>'sponsored'
 const stepNetwork = sql`COALESCE(${workflowExecutionLogs.network}, ${logInputField("network")})`;
 
 /**
+ * What a log subquery is allowed to see. These subqueries used to be bounded by
+ * nothing but the window's lower edge, so each one aggregated every tenant's
+ * step logs and paid the de-TOAST and JSONB parse of `output` / `output_raw` on
+ * all of them. On a table whose bulk is TOAST that is CPU, not IO, and enough
+ * concurrent page loads accumulate into backends that never finish.
+ */
+type LogScope = {
+  organizationId: string;
+  rangeStart: Date;
+  rangeEnd: Date;
+  projectId?: string;
+};
+
+/**
+ * FROM + WHERE for a scoped read of the step logs. The joins narrow the scan to
+ * one organization's executions inside the window before any JSONB is touched,
+ * and the caller appends its own predicates with AND.
+ */
+function scopedLogs(scope: LogScope): SQL {
+  const project = scope.projectId
+    ? sql` AND scoped_wf.project_id = ${scope.projectId}`
+    : sql``;
+  // Bound as ISO text: a raw template has no column to map a Date through, the
+  // way the drizzle comparison helpers do.
+  const from = scope.rangeStart.toISOString();
+  const to = scope.rangeEnd.toISOString();
+  return sql`
+      FROM ${workflowExecutionLogs}
+      JOIN ${workflowExecutions} AS scoped_exec
+        ON scoped_exec.id = ${workflowExecutionLogs.executionId}
+      JOIN ${workflows} AS scoped_wf
+        ON scoped_wf.id = scoped_exec.workflow_id
+     WHERE scoped_wf.organization_id = ${scope.organizationId}
+       AND scoped_exec.started_at >= ${from}
+       AND scoped_exec.started_at < ${to}
+       AND ${workflowExecutionLogs.startedAt} >= ${from}${project}`;
+}
+
+/**
  * Gas facts per execution, aggregated once over the window.
  *
  * These were correlated subqueries on workflow_executions.id, so the planner
@@ -259,7 +297,7 @@ const stepNetwork = sql`COALESCE(${workflowExecutionLogs.network}, ${logInputFie
  * inside the window has started_at >= the window start; and a step may finish
  * after the window closes, so there is no upper bound to apply.
  */
-function workflowGasTotals(logsFrom: Date): SQL {
+function workflowGasTotals(scope: LogScope): SQL {
   return sql`(
     SELECT ${workflowExecutionLogs.executionId} AS execution_id,
            COALESCE(SUM(${filterStepGasWei}), 0) AS step_gas_wei,
@@ -268,8 +306,7 @@ function workflowGasTotals(logsFrom: Date): SQL {
              ${filterStepGasWei} > 0
              AND ${workflowExecutionLogs.outputRaw}->>'sponsored' IS DISTINCT FROM 'true'
            ), false) AS unsponsored_gas_step
-      FROM ${workflowExecutionLogs}
-     WHERE ${gte(workflowExecutionLogs.startedAt, logsFrom)}
+    ${scopedLogs(scope)}
      GROUP BY ${workflowExecutionLogs.executionId}
   )`;
 }
@@ -279,13 +316,18 @@ function workflowGasTotals(logsFrom: Date): SQL {
  * execution_id is nullable, and a NULL reaching a NOT IN below would make the
  * whole predicate answer NULL, so the rows are dropped here at the source.
  */
-const workflowLedgerTotals = sql`(
-  SELECT ${gasCreditUsage.executionId} AS execution_id,
-         COALESCE(SUM(CAST(${gasCreditUsage.gasCostWei} AS NUMERIC)), 0) AS sponsored_gas_wei
-    FROM ${gasCreditUsage}
-   WHERE ${gasCreditUsage.executionId} IS NOT NULL
-   GROUP BY ${gasCreditUsage.executionId}
-)`;
+function workflowLedgerTotals(scope: LogScope): SQL {
+  return sql`(
+    SELECT ${gasCreditUsage.executionId} AS execution_id,
+           COALESCE(SUM(CAST(${gasCreditUsage.gasCostWei} AS NUMERIC)), 0) AS sponsored_gas_wei
+      FROM ${gasCreditUsage}
+     WHERE ${gasCreditUsage.executionId} IS NOT NULL
+       AND ${gasCreditUsage.organizationId} = ${scope.organizationId}
+       AND ${gasCreditUsage.createdAt} >= ${scope.rangeStart.toISOString()}
+       AND ${gasCreditUsage.createdAt} < ${scope.rangeEnd.toISOString()}
+     GROUP BY ${gasCreditUsage.executionId}
+  )`;
+}
 
 /**
  * One predicate per gas category. Sponsored is "gas credit covered a leg";
@@ -294,7 +336,7 @@ const workflowLedgerTotals = sql`(
  * run with no step rows at all - absent from the aggregate rather than present
  * with a zero - still reads as free.
  */
-function workflowGasCondition(value: GasSpend, logsFrom: Date): SQL {
+function workflowGasCondition(value: GasSpend, scope: LogScope): SQL {
   if (value === "sponsored") {
     // Only the marker decides this one, so it reads output_raw directly rather
     // than paying for the gas rollup - and its JSONB decode - that the other
@@ -302,17 +344,16 @@ function workflowGasCondition(value: GasSpend, logsFrom: Date): SQL {
     return sql`(
       ${workflowExecutions.id} IN (
         SELECT ${workflowExecutionLogs.executionId}
-          FROM ${workflowExecutionLogs}
-         WHERE ${gte(workflowExecutionLogs.startedAt, logsFrom)}
+        ${scopedLogs(scope)}
            AND ${filterStepSponsored}
       )
       OR ${workflowExecutions.id} IN (
-        SELECT s.execution_id FROM ${workflowLedgerTotals} AS s
+        SELECT s.execution_id FROM ${workflowLedgerTotals(scope)} AS s
          WHERE s.sponsored_gas_wei > 0
       )
     )`;
   }
-  const totals = workflowGasTotals(logsFrom);
+  const totals = workflowGasTotals(scope);
   if (value === "wallet") {
     // Both signals have to agree there is an unsponsored share: a step that
     // burned gas without the sponsored marker, and a total the ledger did not
@@ -321,7 +362,7 @@ function workflowGasCondition(value: GasSpend, logsFrom: Date): SQL {
     return sql`${workflowExecutions.id} IN (
       SELECT g.execution_id
         FROM ${totals} AS g
-        LEFT JOIN ${workflowLedgerTotals} AS s ON s.execution_id = g.execution_id
+        LEFT JOIN ${workflowLedgerTotals(scope)} AS s ON s.execution_id = g.execution_id
        WHERE g.unsponsored_gas_step
          AND g.step_gas_wei > COALESCE(s.sponsored_gas_wei, 0)
     )`;
@@ -332,7 +373,7 @@ function workflowGasCondition(value: GasSpend, logsFrom: Date): SQL {
        WHERE g.step_gas_wei > 0 OR g.sponsored_step
     )
     AND ${workflowExecutions.id} NOT IN (
-      SELECT s.execution_id FROM ${workflowLedgerTotals} AS s
+      SELECT s.execution_id FROM ${workflowLedgerTotals(scope)} AS s
        WHERE s.sponsored_gas_wei > 0
     )
   )`;
@@ -374,7 +415,7 @@ function gasCondition(
  */
 function workflowFilterConditions(
   filters: RunQueryFilters,
-  rangeStart: Date,
+  scope: LogScope,
   skipStatuses = false
 ): SQL[] {
   const conditions: SQL[] = [];
@@ -384,7 +425,7 @@ function workflowFilterConditions(
   }
   const networks = filters.networks ?? [];
   if (networks.length > 0) {
-    conditions.push(workflowNetworkCondition(networks, rangeStart));
+    conditions.push(workflowNetworkCondition(networks, scope));
   }
   if (filters.durationMinMs !== undefined) {
     conditions.push(
@@ -401,7 +442,7 @@ function workflowFilterConditions(
     conditions.push(workflowSearchCondition(search));
   }
   const gas = gasCondition(filters.gas ?? [], (value) =>
-    workflowGasCondition(value, rangeStart)
+    workflowGasCondition(value, scope)
   );
   if (gas) {
     conditions.push(gas);
@@ -1307,7 +1348,14 @@ async function fetchWorkflowRuns(
     isNull(workflowExecutions.deletedAt),
   ];
 
-  conditions.push(...workflowFilterConditions(filters, rangeStart));
+  conditions.push(
+    ...workflowFilterConditions(filters, {
+      organizationId,
+      rangeStart,
+      rangeEnd,
+      projectId,
+    })
+  );
 
   if (cursor) {
     conditions.push(lt(workflowExecutions.startedAt, new Date(cursor)));
@@ -1584,7 +1632,14 @@ async function getWorkflowRunsTotal(
   if (projectId) {
     conditions.push(eq(workflows.projectId, projectId));
   }
-  conditions.push(...workflowFilterConditions(filters, rangeStart));
+  conditions.push(
+    ...workflowFilterConditions(filters, {
+      organizationId,
+      rangeStart,
+      rangeEnd,
+      projectId,
+    })
+  );
   const result = await db
     .select({ count: count() })
     .from(workflowExecutions)
@@ -1713,7 +1768,11 @@ async function computeRunFacets(
             gte(workflowExecutions.startedAt, rangeStart),
             lt(workflowExecutions.startedAt, rangeEnd),
             isNull(workflowExecutions.deletedAt),
-            ...workflowFilterConditions(filters, rangeStart, true)
+            ...workflowFilterConditions(
+              filters,
+              { organizationId, rangeStart, rangeEnd, projectId },
+              true
+            )
           )
         )
         // Group by the select ordinal: the CASE carries a bound parameter, and
@@ -1782,7 +1841,12 @@ async function computeNetworkFacets(
             lt(workflowExecutions.startedAt, rangeEnd),
             isNull(workflowExecutions.deletedAt),
             sql`${stepNetwork} IS NOT NULL`,
-            ...workflowFilterConditions(withoutNetworks, rangeStart)
+            ...workflowFilterConditions(withoutNetworks, {
+              organizationId,
+              rangeStart,
+              rangeEnd,
+              projectId,
+            })
           )
         )
         // Ordinal, because the expression carries bound parameters that would
