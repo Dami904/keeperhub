@@ -42,6 +42,16 @@ import {
 const NO_CHAINS: ChainData[] = [];
 const NO_SAFES: SafeRow[] = [];
 
+// Chains where the native gas balance and a supported_tokens row represent
+// the same underlying balance at two different decimal precisions (e.g. Arc's
+// native USDC at 18 decimals vs. its ERC-20 interface at 6 decimals). Listing
+// both here would double-count the holding in the wallet menu and its total.
+const NATIVE_MIRRORS_TOKEN_CHAIN_IDS: ReadonlySet<number> = new Set([
+  42_431,
+  4217, // Tempo testnet/mainnet
+  5_042_002, // Arc Testnet (Circle)
+]);
+
 /** One holding the signer has, flattened out of the per-chain balance feed. */
 export type DigestAsset = {
   key: string;
@@ -145,7 +155,10 @@ function fundedAssets(
 ): Omit<DigestAsset, "usdValue">[] {
   const assets: Omit<DigestAsset, "usdValue">[] = [];
   for (const chain of balances) {
-    if (positive(chain.nativeBalance)) {
+    if (
+      !NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(chain.chainId) &&
+      positive(chain.nativeBalance)
+    ) {
       assets.push({
         balance: chain.nativeBalance,
         chainId: chain.chainId,
