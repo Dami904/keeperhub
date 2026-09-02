@@ -386,7 +386,10 @@ export function ChainBalanceItem({
   );
 
   const isTempo = isTempoChain(balance.chainId);
-  const hidesNativeRow = nativeMirrorsSupportedToken(balance.chainId);
+  const hidesNativeRow = nativeMirrorsSupportedToken(
+    balance.chainId,
+    supportedTokenBalances
+  );
   const isMainnet = balance.chainId === MAINNET_CHAIN_ID;
   const isIndependentTokenList = hasIndependentTokenList(balance.chainId);
 

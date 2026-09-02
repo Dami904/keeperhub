@@ -39,6 +39,15 @@ const TEMPO: ChainData = {
   name: "Tempo",
 };
 
+const ARC_TESTNET: ChainData = {
+  ...MAINNET,
+  id: "arc-testnet",
+  chainId: 5_042_002,
+  name: "Arc Testnet",
+  symbol: "USDC",
+  isTestnet: true,
+};
+
 function nativeBalance(overrides: Partial<ChainBalance> = {}): ChainBalance {
   return {
     chainId: 1,
@@ -166,7 +175,7 @@ describe("buildWithdrawableAssets", () => {
     expect(assets).toEqual([]);
   });
 
-  it("skips TEMPO native balances (TEMPO uses stablecoins only)", () => {
+  it("skips TEMPO native balances once a matching supported-token row exists", () => {
     const assets = buildWithdrawableAssets(
       emptyInput({
         chains: [TEMPO],
@@ -177,9 +186,58 @@ describe("buildWithdrawableAssets", () => {
             balance: "5",
           }),
         ],
+        supportedTokenBalances: [
+          supportedTokenBalance({ chainId: TEMPO.chainId, balance: "5" }),
+        ],
       })
     );
-    expect(assets).toEqual([]);
+    expect(assets.filter((a) => a.type === "native")).toEqual([]);
+  });
+
+  it("skips Arc's native USDC once its ERC-20 supported-token row exists", () => {
+    const assets = buildWithdrawableAssets(
+      emptyInput({
+        chains: [ARC_TESTNET],
+        balances: [
+          nativeBalance({
+            chainId: ARC_TESTNET.chainId,
+            name: ARC_TESTNET.name,
+            symbol: "USDC",
+            balance: "0.083134",
+          }),
+        ],
+        supportedTokenBalances: [
+          supportedTokenBalance({
+            chainId: ARC_TESTNET.chainId,
+            balance: "0.083134",
+          }),
+        ],
+      })
+    );
+    expect(assets.filter((a) => a.type === "native")).toEqual([]);
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ type: "token", symbol: "USDC" });
+  });
+
+  it("keeps a candidate chain's native balance visible when no supported-token row has loaded yet", () => {
+    // Guards against a partial token-seed failure making the balance both
+    // invisible in the wallet and unreachable by the withdraw-everything flow.
+    const assets = buildWithdrawableAssets(
+      emptyInput({
+        chains: [ARC_TESTNET],
+        balances: [
+          nativeBalance({
+            chainId: ARC_TESTNET.chainId,
+            name: ARC_TESTNET.name,
+            symbol: "USDC",
+            balance: "0.083134",
+          }),
+        ],
+        supportedTokenBalances: [],
+      })
+    );
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ type: "native", symbol: "USDC" });
   });
 
   it("includes supported tokens with positive balance and metadata decimals", () => {

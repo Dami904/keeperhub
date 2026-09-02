@@ -10,6 +10,7 @@ import {
 import { useCachedResource } from "@/lib/hooks/use-cached-resource";
 import {
   buildWithdrawableAssets,
+  NATIVE_MIRRORS_TOKEN_CHAIN_IDS,
   type WithdrawableAsset,
 } from "@/lib/wallet/build-withdrawable-assets";
 import {
@@ -41,16 +42,6 @@ import {
 // Stable identities: a fresh [] per render would bust every downstream memo.
 const NO_CHAINS: ChainData[] = [];
 const NO_SAFES: SafeRow[] = [];
-
-// Chains where the native gas balance and a supported_tokens row represent
-// the same underlying balance at two different decimal precisions (e.g. Arc's
-// native USDC at 18 decimals vs. its ERC-20 interface at 6 decimals). Listing
-// both here would double-count the holding in the wallet menu and its total.
-const NATIVE_MIRRORS_TOKEN_CHAIN_IDS: ReadonlySet<number> = new Set([
-  42_431,
-  4217, // Tempo testnet/mainnet
-  5_042_002, // Arc Testnet (Circle)
-]);
 
 /** One holding the signer has, flattened out of the per-chain balance feed. */
 export type DigestAsset = {
@@ -155,10 +146,13 @@ function fundedAssets(
 ): Omit<DigestAsset, "usdValue">[] {
   const assets: Omit<DigestAsset, "usdValue">[] = [];
   for (const chain of balances) {
-    if (
-      !NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(chain.chainId) &&
-      positive(chain.nativeBalance)
-    ) {
+    // A candidate chain (Arc, Tempo) only hides its native row once a
+    // matching supported-token row has actually loaded; a partial token-seed
+    // failure must not make the balance both invisible and unwithdrawable.
+    const nativeMirrored =
+      NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(chain.chainId) &&
+      (chain.supportedTokens?.length ?? 0) > 0;
+    if (!nativeMirrored && positive(chain.nativeBalance)) {
       assets.push({
         balance: chain.nativeBalance,
         chainId: chain.chainId,

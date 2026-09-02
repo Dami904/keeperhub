@@ -29,14 +29,39 @@ export type BuildWithdrawableAssetsInput = {
 
 const TEMPO_CHAIN_IDS: ReadonlySet<number> = new Set([42_431, 4217]);
 
-// Chains where the native gas balance and a supported_tokens row represent
-// the same underlying balance at two different decimal precisions (e.g. Arc's
-// native USDC at 18 decimals vs. its ERC-20 interface at 6 decimals). Listing
-// both as separate withdrawable assets double-counts the balance.
-const NATIVE_MIRRORS_TOKEN_CHAIN_IDS: ReadonlySet<number> = new Set([
+// Chains where the native gas balance and a supported_tokens row *can*
+// represent the same underlying balance at two different decimal precisions
+// (e.g. Arc's native USDC at 18 decimals vs. its ERC-20 interface at 6
+// decimals). This is the candidate set only -- whether to actually suppress
+// the native asset also depends on a matching supported-token row being
+// present in the feed (see `nativeMirrorsSupportedToken`), so a partial
+// token-seed failure never leaves the balance both invisible and
+// unwithdrawable. This is the single source of truth for the set; other
+// wallet modules import it (or the helper) from here rather than
+// re-declaring it.
+export const NATIVE_MIRRORS_TOKEN_CHAIN_IDS: ReadonlySet<number> = new Set([
   ...TEMPO_CHAIN_IDS,
   5_042_002, // Arc Testnet (Circle)
 ]);
+
+/**
+ * True when `chainId`'s native balance should be treated as already
+ * represented by a supported-token row -- i.e. it's a candidate chain AND a
+ * supported-token row for it actually exists in `supportedTokenBalances`.
+ * Callers pass whatever supported-token feed they have on hand; a chain
+ * whose token seed failed or hasn't loaded yet keeps its native row visible
+ * and withdrawable rather than disappearing.
+ */
+export function nativeMirrorsSupportedToken(
+  chainId: number,
+  supportedTokenBalances: readonly { chainId: number }[]
+): boolean {
+  return (
+    NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(chainId) &&
+    supportedTokenBalances.some((t) => t.chainId === chainId)
+  );
+}
+
 const DEFAULT_STABLECOIN_DECIMALS = 6;
 
 function hasPositiveBalance(raw: string): boolean {
@@ -49,7 +74,12 @@ function collectNativeAssets(
 ): WithdrawableAsset[] {
   const assets: WithdrawableAsset[] = [];
   for (const balance of input.balances) {
-    if (NATIVE_MIRRORS_TOKEN_CHAIN_IDS.has(balance.chainId)) {
+    if (
+      nativeMirrorsSupportedToken(
+        balance.chainId,
+        input.supportedTokenBalances
+      )
+    ) {
       continue;
     }
     const chain = input.chains.find((c) => c.chainId === balance.chainId);
