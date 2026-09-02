@@ -37,6 +37,7 @@ const REBALANCE_ID = `${PREFIX}wf_rebalance`;
 
 const BASE = "8453";
 const ARBITRUM = "42161";
+const OPTIMISM = "10";
 
 type Seed = {
   id: string;
@@ -47,6 +48,8 @@ type Seed = {
   network?: string;
   /** Carries the gas-station marker a web3 step core writes on a sponsored tx. */
   sponsored?: boolean;
+  /** Chain recorded only in the step's JSONB, with the column left null. */
+  legacyNetwork?: string;
 };
 
 // One run per interesting combination, so a filter that over- or under-selects
@@ -82,6 +85,15 @@ const SEEDS: Seed[] = [
     status: "success",
     durationMs: 2000,
     network: ARBITRUM,
+  },
+  {
+    id: `${PREFIX}legacy_chain`,
+    workflowId: NIGHTLY_ID,
+    status: "success",
+    durationMs: 2500,
+    // Chain only in the JSONB, as every row written before the denormalised
+    // column existed still has it.
+    legacyNetwork: OPTIMISM,
   },
   {
     id: `${PREFIX}sponsored`,
@@ -196,13 +208,14 @@ describe.skipIf(SKIP)("analytics run filters", () => {
       nodeName: string;
       nodeType: string;
       status: "success";
-      network: string;
+      network: string | null;
       gasUsedWei: string | null;
       outputRaw: { sponsored: boolean } | null;
+      input: unknown;
       startedAt: Date;
     }> = [];
     for (const seed of SEEDS) {
-      if (seed.network === undefined) {
+      if (seed.network === undefined && seed.legacyNetwork === undefined) {
         continue;
       }
       logRows.push({
@@ -212,7 +225,10 @@ describe.skipIf(SKIP)("analytics run filters", () => {
         nodeName: "Step",
         nodeType: "web3/transfer",
         status: "success" as const,
-        network: seed.network,
+        network: seed.network ?? null,
+        input: seed.legacyNetwork
+          ? JSON.stringify({ network: seed.legacyNetwork })
+          : null,
         gasUsedWei: seed.status === "success" ? "21000" : null,
         outputRaw: seed.sponsored ? { sponsored: true } : null,
         startedAt: now,
@@ -277,7 +293,12 @@ describe.skipIf(SKIP)("analytics run filters", () => {
       [`${PREFIX}external_err`, `${PREFIX}system_err`].sort()
     );
     expect(await idsFor({ durationMaxMs: 5000 })).toEqual(
-      [`${PREFIX}ok`, `${PREFIX}sponsored`, `${PREFIX}user_err`].sort()
+      [
+        `${PREFIX}ok`,
+        `${PREFIX}legacy_chain`,
+        `${PREFIX}sponsored`,
+        `${PREFIX}user_err`,
+      ].sort()
     );
   });
 
@@ -297,7 +318,9 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     expect(await idsFor({ gas: ["sponsored"] })).toEqual([
       `${PREFIX}sponsored`,
     ]);
-    expect(await idsFor({ gas: ["wallet"] })).toEqual([`${PREFIX}ok`]);
+    expect(await idsFor({ gas: ["wallet"] })).toEqual(
+      [`${PREFIX}ok`, `${PREFIX}legacy_chain`].sort()
+    );
 
     const free = await idsFor({ gas: ["free"] });
     expect(free).not.toContain(`${PREFIX}ok`);
@@ -321,15 +344,20 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     const { networkCounts } = await getRunFacets(ORG_ID, "7d");
     // The seeded runs record a chain on their step but no gas on most of them.
     // Sourcing the options from the gas breakdown dropped exactly those.
-    expect(Object.keys(networkCounts).sort()).toEqual([ARBITRUM, BASE].sort());
+    // Optimism is only in the JSONB. Listing options from the denormalised
+    // column alone dropped it, while the filter would have matched it.
+    expect(Object.keys(networkCounts).sort()).toEqual(
+      [ARBITRUM, BASE, OPTIMISM].sort()
+    );
     expect(networkCounts[BASE]).toBeGreaterThan(0);
     expect(networkCounts[ARBITRUM]).toBeGreaterThan(0);
+    expect(networkCounts[OPTIMISM]).toBe(1);
   });
 
   it("counts each gas bucket, including the empty ones", async () => {
     const { gasCounts } = await getRunFacets(ORG_ID, "7d");
     expect(gasCounts.sponsored).toBe(1);
-    expect(gasCounts.wallet).toBe(1);
+    expect(gasCounts.wallet).toBe(2);
     expect(gasCounts.free).toBeGreaterThan(0);
   });
 
@@ -338,7 +366,7 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     expect(facets.error).toBe(1);
     expect(facets.external_error).toBe(1);
     expect(facets.system_error).toBe(1);
-    expect(facets.success).toBe(2);
+    expect(facets.success).toBe(3);
     expect(facets.skipped).toBe(1);
     expect(facets.running).toBe(1);
   });

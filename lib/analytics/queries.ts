@@ -192,7 +192,7 @@ function workflowNetworkCondition(networks: string[], logsFrom: Date): SQL {
     SELECT ${workflowExecutionLogs.executionId}
       FROM ${workflowExecutionLogs}
      WHERE ${gte(workflowExecutionLogs.startedAt, logsFrom)}
-       AND COALESCE(${workflowExecutionLogs.network}, ${logInputField("network")}) IN (${sql.join(
+       AND ${stepNetwork} IN (${sql.join(
          networks.map((network) => sql`${network}`),
          sql`, `
        )})
@@ -233,6 +233,16 @@ const directDurationMs = sql`(EXTRACT(EPOCH FROM (${directExecutions.completedAt
 // backfill has not reached - still classify correctly.
 const filterStepGasWei = sql`COALESCE(${workflowExecutionLogs.gasUsedWei}, CAST(NULLIF(${logOutputField("gasUsed")}, '') AS NUMERIC))`;
 const filterStepSponsored = sql`${workflowExecutionLogs.outputRaw}->>'sponsored' = 'true'`;
+
+/**
+ * The chain a step ran on. The denormalised column is only populated on rows
+ * the executor wrote after it was added, and on what the backfill has reached,
+ * so the JSONB it was derived from is still the answer for everything older.
+ * Every reader has to use this same expression: matching on it while listing
+ * options from the bare column offers a filter a chain it will then match, and
+ * hides every chain whose column was never filled.
+ */
+const stepNetwork = sql`COALESCE(${workflowExecutionLogs.network}, ${logInputField("network")})`;
 
 /**
  * Gas facts per execution, aggregated once over the window.
@@ -1755,7 +1765,7 @@ async function computeNetworkFacets(
   const workflowRows = wanted.workflow
     ? await db
         .select({
-          network: workflowExecutionLogs.network,
+          network: sql<string | null>`${stepNetwork}`,
           value: sql<number>`COUNT(DISTINCT ${workflowExecutions.id})`,
         })
         .from(workflowExecutionLogs)
@@ -1771,11 +1781,13 @@ async function computeNetworkFacets(
             gte(workflowExecutions.startedAt, rangeStart),
             lt(workflowExecutions.startedAt, rangeEnd),
             isNull(workflowExecutions.deletedAt),
-            isNotNull(workflowExecutionLogs.network),
+            sql`${stepNetwork} IS NOT NULL`,
             ...workflowFilterConditions(withoutNetworks, rangeStart)
           )
         )
-        .groupBy(workflowExecutionLogs.network)
+        // Ordinal, because the expression carries bound parameters that would
+        // bind a second time and stop matching the select.
+        .groupBy(sql`1`)
     : [];
 
   const directRows = wanted.direct
