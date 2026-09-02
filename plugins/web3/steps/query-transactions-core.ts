@@ -19,6 +19,10 @@ import { serializeArg } from "@/lib/web3/serialize-arg";
 import { evmOnlyGuard } from "@/lib/web3/validate-chain-address";
 import { getErrorMessage } from "@/lib/utils";
 import { resolveBlockRange } from "./block-range-helpers";
+import {
+  type ReadFailOnErrorInput,
+  softenReadFailure,
+} from "./read-fail-on-error-core";
 
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY;
 
@@ -40,16 +44,21 @@ export type DecodedTransaction = {
 export type QueryTransactionsResult =
   | {
       success: true;
-      transactions: DecodedTransaction[];
-      fromBlock: number;
-      toBlock: number;
-      totalFetched: number;
-      matchCount: number;
+      // Null when failOnError=false softened a failed query into a success
+      // value so the workflow continues; `error` carries the reason. Null
+      // rather than an empty list so a downstream node cannot read a failed
+      // query as "no matching transactions".
+      transactions: DecodedTransaction[] | null;
+      fromBlock: number | null;
+      toBlock: number | null;
+      totalFetched: number | null;
+      matchCount: number | null;
       contractAddressLink: string;
+      error?: string;
     }
   | { success: false; error: string };
 
-export type QueryTransactionsCoreInput = {
+export type QueryTransactionsCoreInput = ReadFailOnErrorInput & {
   network: string;
   contractAddress: string;
   abi: string;
@@ -288,6 +297,15 @@ function validateInputs(
   };
 }
 
+/** Data fields a softened query reports, so a soft failure never looks like an empty result set. */
+const SOFT_QUERY_FIELDS = {
+  transactions: null,
+  fromBlock: null,
+  toBlock: null,
+  totalFetched: null,
+  matchCount: null,
+} as const;
+
 export async function queryTransactionsCore(
   input: QueryTransactionsCoreInput
 ): Promise<QueryTransactionsResult> {
@@ -320,6 +338,10 @@ export async function queryTransactionsCore(
       )
   );
   if (!blockRangeResult.success) {
+    const soft = softenReadFailure(input.failOnError, blockRangeResult.error);
+    if (soft) {
+      return { ...soft, ...SOFT_QUERY_FIELDS, contractAddressLink: "" };
+    }
     return { success: false, error: blockRangeResult.error };
   }
   const { range } = blockRangeResult;
@@ -362,6 +384,10 @@ export async function queryTransactionsCore(
   );
 
   if (!txResult.success) {
+    const soft = softenReadFailure(input.failOnError, txResult.error);
+    if (soft) {
+      return { ...soft, ...SOFT_QUERY_FIELDS, contractAddressLink };
+    }
     return { success: false, error: txResult.error };
   }
 

@@ -10,9 +10,13 @@ import { getRpcPreferenceUserId } from "@/lib/workflow/executor/helpers";
 import { type StepInput, withStepLogging } from "@/lib/workflow/executor/step-handler";
 import { getErrorMessage } from "@/lib/utils";
 import { getChainAdapter } from "@/lib/web3/chain-adapter";
+import {
+  type ReadFailOnErrorInput,
+  softenReadFailure,
+} from "./read-fail-on-error-core";
 import { parseTokenAddress } from "./transfer-token-core";
 
-export type CheckAllowanceCoreInput = {
+export type CheckAllowanceCoreInput = ReadFailOnErrorInput & {
   network: string;
   tokenConfig: string | Record<string, unknown>;
   ownerAddress: string;
@@ -25,9 +29,12 @@ export type CheckAllowanceInput = StepInput & CheckAllowanceCoreInput;
 type CheckAllowanceResult =
   | {
       success: true;
-      allowance: string;
-      allowanceRaw: string;
-      symbol: string;
+      // Null when failOnError=false softened a failed read into a success
+      // value so the workflow continues; `error` carries the reason.
+      allowance: string | null;
+      allowanceRaw: string | null;
+      symbol: string | null;
+      error?: string;
     }
   | { success: false; error: string };
 
@@ -154,10 +161,12 @@ async function stepHandler(
         chain_id: String(chainId),
       }
     );
-    return {
-      success: false,
-      error: `Failed to check allowance: ${getErrorMessage(error)}`,
-    };
+    const message = `Failed to check allowance: ${getErrorMessage(error)}`;
+    const soft = softenReadFailure(input.failOnError, message);
+    if (soft) {
+      return { ...soft, allowance: null, allowanceRaw: null, symbol: null };
+    }
+    return { success: false, error: message };
   }
 }
 

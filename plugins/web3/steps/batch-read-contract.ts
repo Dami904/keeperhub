@@ -10,6 +10,10 @@ import { getRpcPreferenceUserId } from "@/lib/workflow/executor/helpers";
 import { runPluginStep, type StepInput } from "@/lib/workflow/executor/step-handler";
 import { getErrorMessage } from "@/lib/utils";
 import {
+  type ReadFailOnErrorInput,
+  softenReadFailure,
+} from "@/plugins/web3/steps/read-fail-on-error-core";
+import {
   type AbiOutputParam,
   structureAbiOutputs,
 } from "@/plugins/web3/steps/structure-abi-result";
@@ -26,10 +30,20 @@ type CallResult = {
 };
 
 type BatchReadContractResult =
-  | { success: true; results: CallResult[]; totalCalls: number }
+  | {
+      success: true;
+      // Null when failOnError=false softened a failed batch into a success
+      // value so the workflow continues; `error` carries the reason. Null
+      // rather than an empty list so a downstream node cannot read a failed
+      // batch as "every call returned nothing". A single call reverting is
+      // already isolated into its own `results` entry and is unaffected.
+      results: CallResult[] | null;
+      totalCalls: number | null;
+      error?: string;
+    }
   | { success: false; error: string };
 
-export type BatchReadContractCoreInput = {
+export type BatchReadContractCoreInput = ReadFailOnErrorInput & {
   network?: string;
   abi?: string;
   inputMode?: string;
@@ -636,6 +650,10 @@ async function executeUniformMode(
   );
 
   if (batchError) {
+    const soft = softenReadFailure(input.failOnError, batchError);
+    if (soft) {
+      return { ...soft, results: null, totalCalls: null };
+    }
     return { success: false, error: batchError };
   }
 
@@ -707,7 +725,10 @@ async function executeMixedMode(
     results: CallResult[];
     group: IndexedEncodedCall[];
   };
-  type GroupFailure = { ok: false; error: string };
+  // `soft` marks a failure of the multicall execution itself, the only kind
+  // the failOnError toggle may soften. An unresolved network or RPC config is
+  // a config problem and always hard-fails.
+  type GroupFailure = { ok: false; error: string; soft?: boolean };
   type GroupOutcome = GroupSuccess | GroupFailure;
 
   // Execute all network groups in parallel
@@ -728,7 +749,7 @@ async function executeMixedMode(
         chainRpc.chainId
       );
       if (batchResult.error !== undefined) {
-        return { ok: false, error: batchResult.error };
+        return { ok: false, error: batchResult.error, soft: true };
       }
 
       return { ok: true, results: batchResult.results, group };
@@ -737,6 +758,12 @@ async function executeMixedMode(
 
   for (const outcome of groupOutcomes) {
     if (!outcome.ok) {
+      const soft = outcome.soft
+        ? softenReadFailure(input.failOnError, outcome.error)
+        : undefined;
+      if (soft) {
+        return { ...soft, results: null, totalCalls: null };
+      }
       return { success: false, error: outcome.error };
     }
     for (const [resultIdx, groupCall] of outcome.group.entries()) {

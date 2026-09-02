@@ -231,3 +231,56 @@ describe("readSolanaProgramCore", () => {
     );
   });
 });
+
+describe("readSolanaProgramCore - failOnError", () => {
+  let mockAdapter: {
+    executeWithSolanaFailover: ReturnType<typeof vi.fn>;
+    getAddressUrl: ReturnType<typeof vi.fn>;
+  };
+
+  const validInput = {
+    network: "solana-devnet",
+    accountAddress: ADDRESS,
+    programId: PROGRAM,
+    idl: JSON.stringify(fixtureIdl()),
+    accountType: "Vault",
+    failOnError: false,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAdapter = {
+      executeWithSolanaFailover: vi.fn(),
+      getAddressUrl: vi.fn().mockResolvedValue(""),
+    };
+    vi.mocked(getChainAdapter).mockReturnValue(mockAdapter as never);
+  });
+
+  it("softens a failed read when the toggle is off", async () => {
+    mockAdapter.executeWithSolanaFailover.mockRejectedValue(
+      new Error("RPC down")
+    );
+
+    const result = await readSolanaProgramCore(validInput);
+
+    expect(result).toMatchObject({ success: true, result: null, owner: null });
+  });
+
+  it("softens a missing account when the toggle is off", async () => {
+    mockAdapter.executeWithSolanaFailover.mockResolvedValue(null);
+
+    const result = await readSolanaProgramCore(validInput);
+
+    expect(result).toMatchObject({ success: true, result: null });
+    expect((result as { error?: string }).error).toContain("Account not found");
+  });
+
+  it("still hard-fails a malformed IDL when the toggle is off", async () => {
+    const result = await readSolanaProgramCore({
+      ...validInput,
+      idl: "{bad",
+    });
+
+    expect(result).toMatchObject({ success: false });
+  });
+});

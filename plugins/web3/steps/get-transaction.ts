@@ -19,6 +19,10 @@ import { runPluginStep, type StepInput } from "@/lib/workflow/executor/step-hand
 import { getErrorMessage } from "@/lib/utils";
 import { SolanaChainAdapter } from "@/lib/web3/chain-adapter/solana";
 import { validateChainTxHash } from "@/lib/web3/validate-chain-address";
+import {
+  type ReadFailOnErrorInput,
+  softenReadFailure,
+} from "./read-fail-on-error-core";
 
 /**
  * Index 0 of a transaction's account keys is always the fee payer - the
@@ -40,13 +44,16 @@ function getSolanaFeePayer(tx: VersionedTransactionResponse): string {
 type GetTransactionResult =
   | {
       success: true;
-      hash: string;
-      from: string;
+      // Every field below is null when failOnError=false softened a failed
+      // lookup into a success value so the workflow continues; `error`
+      // carries the reason.
+      hash: string | null;
+      from: string | null;
       to: string | null;
-      value: string;
-      input: string;
-      nonce: number;
-      gasLimit: string;
+      value: string | null;
+      input: string | null;
+      nonce: number | null;
+      gasLimit: string | null;
       // Solana only: actual compute units consumed. Not comparable to
       // gasLimit (an EVM ceiling the transaction was allowed to spend, not
       // what it used), so it is reported as its own field rather than
@@ -56,10 +63,26 @@ type GetTransactionResult =
       transactionLink: string;
       fromLink: string;
       toLink: string;
+      error?: string;
     }
   | { success: false; error: string };
 
-export type GetTransactionCoreInput = {
+/** Data fields a softened lookup reports, so a soft failure never looks like a real transaction. */
+const SOFT_TRANSACTION_FIELDS = {
+  hash: null,
+  from: null,
+  to: null,
+  value: null,
+  input: null,
+  nonce: null,
+  gasLimit: null,
+  blockNumber: null,
+  transactionLink: "",
+  fromLink: "",
+  toLink: "",
+} as const;
+
+export type GetTransactionCoreInput = ReadFailOnErrorInput & {
   network: string;
   transactionHash: string;
 };
@@ -72,7 +95,8 @@ export type GetTransactionInput = StepInput & GetTransactionCoreInput;
 async function fetchEvmTransaction(
   hash: string,
   chainId: number,
-  userId: string | undefined
+  userId: string | undefined,
+  failOnError: unknown
 ): Promise<GetTransactionResult> {
   let rpcManager: RpcProviderManager;
   try {
@@ -86,7 +110,11 @@ async function fetchEvmTransaction(
   );
 
   if (!tx) {
-    return { success: false, error: `Transaction not found: ${hash}` };
+    const message = `Transaction not found: ${hash}`;
+    const soft = softenReadFailure(failOnError, message);
+    return soft
+      ? { ...soft, ...SOFT_TRANSACTION_FIELDS }
+      : { success: false, error: message };
   }
 
   const explorerConfig = await db.query.explorerConfigs.findFirst({
@@ -126,7 +154,8 @@ async function fetchEvmTransaction(
 async function fetchSolanaTransaction(
   hash: string,
   chainId: number,
-  userId: string | undefined
+  userId: string | undefined,
+  failOnError: unknown
 ): Promise<GetTransactionResult> {
   const adapter = new SolanaChainAdapter(chainId, () =>
     getSolanaProvider({ chainId, userId })
@@ -139,7 +168,11 @@ async function fetchSolanaTransaction(
   );
 
   if (!tx) {
-    return { success: false, error: `Transaction not found: ${hash}` };
+    const message = `Transaction not found: ${hash}`;
+    const soft = softenReadFailure(failOnError, message);
+    return soft
+      ? { ...soft, ...SOFT_TRANSACTION_FIELDS }
+      : { success: false, error: message };
   }
 
   const feePayer = getSolanaFeePayer(tx);
@@ -179,7 +212,7 @@ async function fetchSolanaTransaction(
 async function stepHandler(
   input: GetTransactionInput
 ): Promise<GetTransactionResult> {
-  const { network, transactionHash, _context } = input;
+  const { network, transactionHash, failOnError, _context } = input;
 
   if (!transactionHash?.trim()) {
     return {
@@ -213,13 +246,15 @@ async function stepHandler(
 
   try {
     return isSolanaChain(chainId)
-      ? await fetchSolanaTransaction(hash, chainId, userId)
-      : await fetchEvmTransaction(hash, chainId, userId);
+      ? await fetchSolanaTransaction(hash, chainId, userId, failOnError)
+      : await fetchEvmTransaction(hash, chainId, userId, failOnError);
   } catch (error) {
-    return {
-      success: false,
-      error: `Failed to fetch transaction: ${getErrorMessage(error)}`,
-    };
+    const message = `Failed to fetch transaction: ${getErrorMessage(error)}`;
+    const soft = softenReadFailure(failOnError, message);
+    if (soft) {
+      return { ...soft, ...SOFT_TRANSACTION_FIELDS };
+    }
+    return { success: false, error: message };
   }
 }
 

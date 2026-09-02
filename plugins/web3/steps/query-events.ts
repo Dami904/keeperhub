@@ -18,6 +18,10 @@ import {
   isNearHeadBatch,
   queryBatchWithRetry,
 } from "./query-events-core";
+import {
+  type ReadFailOnErrorInput,
+  softenReadFailure,
+} from "./read-fail-on-error-core";
 
 const DEFAULT_BATCH_SIZE = 2000;
 
@@ -31,14 +35,27 @@ type DecodedEvent = {
 type QueryEventsResult =
   | {
       success: true;
-      events: DecodedEvent[];
-      fromBlock: number;
-      toBlock: number;
-      eventCount: number;
+      // Null when failOnError=false softened a failed query into a success
+      // value so the workflow continues; `error` carries the reason. Null
+      // rather than an empty list so a downstream node cannot read a failed
+      // query as "no events in range".
+      events: DecodedEvent[] | null;
+      fromBlock: number | null;
+      toBlock: number | null;
+      eventCount: number | null;
+      error?: string;
     }
   | { success: false; error: string };
 
-export type QueryEventsCoreInput = {
+/** Data fields a softened query reports, so a soft failure never looks like an empty result set. */
+const SOFT_QUERY_FIELDS = {
+  events: null,
+  fromBlock: null,
+  toBlock: null,
+  eventCount: null,
+} as const;
+
+export type QueryEventsCoreInput = ReadFailOnErrorInput & {
   network: string;
   contractAddress: string;
   abi: string;
@@ -234,6 +251,10 @@ async function stepHandler(
       )
   );
   if (!blockRangeResult.success) {
+    const soft = softenReadFailure(input.failOnError, blockRangeResult.error);
+    if (soft) {
+      return { ...soft, ...SOFT_QUERY_FIELDS };
+    }
     return { success: false, error: blockRangeResult.error };
   }
   const { range } = blockRangeResult;
@@ -273,10 +294,12 @@ async function stepHandler(
       eventCount: events.length,
     };
   } catch (error) {
-    return {
-      success: false,
-      error: `Event query failed: ${getErrorMessage(error)}`,
-    };
+    const message = `Event query failed: ${getErrorMessage(error)}`;
+    const soft = softenReadFailure(input.failOnError, message);
+    if (soft) {
+      return { ...soft, ...SOFT_QUERY_FIELDS };
+    }
+    return { success: false, error: message };
   }
 }
 

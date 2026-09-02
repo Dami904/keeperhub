@@ -258,3 +258,45 @@ describe("check-allowance - error handling", () => {
     }
   });
 });
+
+describe("check-allowance - failOnError", () => {
+  type SoftResult = {
+    success: boolean;
+    allowance: string | null;
+    error?: string;
+  };
+
+  it("softens a failed read when the toggle is off", async () => {
+    setupMocks();
+    mockAllowance.mockRejectedValue(new Error("RPC timeout"));
+
+    const result = (await checkAllowanceStep(
+      makeInput({ failOnError: false })
+    )) as SoftResult;
+
+    expect(result.success).toBe(true);
+    expect(result.allowance).toBeNull();
+    expect(result.error).toContain("Failed to check allowance");
+  });
+
+  it("still hard-fails an unresolved RPC config when the toggle is off", async () => {
+    setupMocks();
+    mockGetRpcProvider.mockRejectedValue(new Error("RPC config not found"));
+
+    const result = (await checkAllowanceStep(
+      makeInput({ failOnError: false })
+    )) as SoftResult;
+
+    expect(result.success).toBe(false);
+  });
+
+  it("still hard-fails an invalid owner address when the toggle is off", async () => {
+    setupMocks();
+
+    const result = (await checkAllowanceStep(
+      makeInput({ ownerAddress: "not-an-address", failOnError: false })
+    )) as SoftResult;
+
+    expect(result.success).toBe(false);
+  });
+});

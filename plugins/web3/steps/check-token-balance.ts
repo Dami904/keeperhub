@@ -13,6 +13,10 @@ import { getErrorMessage } from "@/lib/utils";
 import { getChainAdapter } from "@/lib/web3/chain-adapter";
 import { validateChainAddress } from "@/lib/web3/validate-chain-address";
 import {
+  type ReadFailOnErrorInput,
+  softenReadFailure,
+} from "./read-fail-on-error-core";
+import {
   getTokenAddress,
   parseTokenConfig,
   type TokenBalanceInfo,
@@ -22,16 +26,20 @@ import {
 type CheckTokenBalanceResult =
   | {
       success: true;
-      balance: TokenBalanceInfo;
+      // Null when failOnError=false softened a failed read into a success
+      // value so the workflow continues; `error` carries the reason.
+      balance: TokenBalanceInfo | null;
       address: string;
       addressLink: string;
+      error?: string;
     }
   | { success: false; error: string };
 
-export type CheckTokenBalanceCoreInput = TokenConfigSource & {
-  network: string;
-  address: string;
-};
+export type CheckTokenBalanceCoreInput = TokenConfigSource &
+  ReadFailOnErrorInput & {
+    network: string;
+    address: string;
+  };
 
 export type CheckTokenBalanceInput = StepInput & CheckTokenBalanceCoreInput;
 
@@ -108,7 +116,8 @@ async function checkEvmTokenBalance(
   address: string,
   tokenAddress: string,
   chainId: number,
-  userId: string | undefined
+  userId: string | undefined,
+  failOnError: unknown
 ): Promise<CheckTokenBalanceResult> {
   let rpcManager: RpcProviderManager;
   try {
@@ -161,10 +170,17 @@ async function checkEvmTokenBalance(
         chain_id: String(chainId),
       }
     );
-    return {
-      success: false,
-      error: `Failed to check token balance: ${getErrorMessage(error)}`,
-    };
+    const message = `Failed to check token balance: ${getErrorMessage(error)}`;
+    const soft = softenReadFailure(failOnError, message);
+    if (soft) {
+      return {
+        ...soft,
+        balance: null,
+        address,
+        addressLink: await adapter.getAddressUrl(address),
+      };
+    }
+    return { success: false, error: message };
   }
 }
 
@@ -270,7 +286,13 @@ async function stepHandler(
     };
   }
 
-  return checkEvmTokenBalance(address, tokenAddress, chainId, userId);
+  return checkEvmTokenBalance(
+    address,
+    tokenAddress,
+    chainId,
+    userId,
+    input.failOnError
+  );
 }
 
 /**
