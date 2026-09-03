@@ -190,7 +190,11 @@ async function stepHandler(
   try {
     chainId = getChainIdFromNetwork(network);
   } catch (error) {
-    return { success: false, error: getErrorMessage(error) };
+    return {
+      success: false,
+      destinationError: true,
+      error: getErrorMessage(error),
+    };
   }
 
   // Event querying decodes EVM ABI logs, which have no Solana equivalent
@@ -238,6 +242,7 @@ async function stepHandler(
   } catch (error) {
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }

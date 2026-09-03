@@ -102,7 +102,11 @@ async function fetchEvmTransaction(
   try {
     rpcManager = await getRpcProvider({ chainId, userId });
   } catch (error) {
-    return { success: false, error: getErrorMessage(error) };
+    return {
+      success: false,
+      destinationError: true,
+      error: getErrorMessage(error),
+    };
   }
 
   const tx = await rpcManager.executeWithFailover(async (provider) =>
@@ -224,6 +228,7 @@ async function stepHandler(
   } catch (error) {
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }

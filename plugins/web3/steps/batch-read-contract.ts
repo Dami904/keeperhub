@@ -722,7 +722,7 @@ async function executeMixedMode(
     results: CallResult[];
     group: IndexedEncodedCall[];
   };
-  type GroupFailure = { ok: false; error: string };
+  type GroupFailure = { ok: false; error: string; destinationError?: true };
   type GroupOutcome = GroupSuccess | GroupFailure;
 
   // Execute all network groups in parallel
@@ -733,7 +733,7 @@ async function executeMixedMode(
     groupEntries.map(async ([networkKey, group]): Promise<GroupOutcome> => {
       const chainRpc = await resolveChainRpc(networkKey, userId);
       if (chainRpc.error !== undefined) {
-        return { ok: false, error: chainRpc.error };
+        return { ok: false, error: chainRpc.error, destinationError: true };
       }
 
       const batchResult = await executeMulticallBatches(
@@ -752,7 +752,9 @@ async function executeMixedMode(
 
   for (const outcome of groupOutcomes) {
     if (!outcome.ok) {
-      return { success: false, error: outcome.error };
+      return outcome.destinationError
+        ? { success: false, destinationError: true, error: outcome.error }
+        : { success: false, error: outcome.error };
     }
     for (const [resultIdx, groupCall] of outcome.group.entries()) {
       allResults[groupCall.originalIndex] = outcome.results[resultIdx];

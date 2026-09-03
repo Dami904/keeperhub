@@ -217,7 +217,11 @@ function resolveQueryContext(
   try {
     chainId = getChainIdFromNetwork(input.network);
   } catch (error) {
-    return { success: false, error: getErrorMessage(error) };
+    return {
+      success: false,
+      destinationError: true,
+      error: getErrorMessage(error),
+    };
   }
 
   return {
@@ -456,7 +460,11 @@ async function queryProgramEventsInner(
   try {
     rpcManager = await getSolanaProvider({ chainId, userId });
   } catch (error) {
-    return { success: false, error: getErrorMessage(error) };
+    return {
+      success: false,
+      destinationError: true,
+      error: getErrorMessage(error),
+    };
   }
 
   let signatures: ConfirmedSignatureInfo[];

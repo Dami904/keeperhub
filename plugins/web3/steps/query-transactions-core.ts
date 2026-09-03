@@ -263,7 +263,11 @@ function validateInputs(
   try {
     chainId = getChainIdFromNetwork(input.network);
   } catch (error) {
-    return { success: false, error: getErrorMessage(error) };
+    return {
+      success: false,
+      destinationError: true,
+      error: getErrorMessage(error),
+    };
   }
 
   // Transaction querying decodes calls via an EVM ABI function selector,
@@ -338,6 +342,7 @@ async function queryTransactionsInner(
   } catch (error) {
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }
@@ -363,6 +368,7 @@ async function queryTransactionsInner(
   if (!explorerConfig) {
     return {
       success: false,
+      destinationError: true,
       error: `No explorer configuration found for chain ${chainId}`,
     };
   }
