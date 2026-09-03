@@ -123,13 +123,21 @@ describe.skipIf(SKIP)("analytics run filters", () => {
   let db: ReturnType<typeof drizzle>;
   let getUnifiedRuns: (
     organizationId: string,
-    range: "7d",
-    options?: RunQueryFilters & { limit?: number }
+    range: "7d" | "custom",
+    options?: RunQueryFilters & {
+      limit?: number;
+      customStart?: string;
+      customEnd?: string;
+    }
   ) => Promise<{ runs: UnifiedRun[]; total: number }>;
   let getRunFacets: (
     organizationId: string,
     range: "7d",
-    options?: RunQueryFilters & { dimensions?: FacetDimension[] }
+    options?: RunQueryFilters & {
+      dimensions?: FacetDimension[];
+      customStart?: string;
+      customEnd?: string;
+    }
   ) => Promise<RunFacets>;
 
   async function cleanup(): Promise<void> {
@@ -398,6 +406,55 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     const myBaseRuns = await idsFor({ networks: [BASE] });
     expect(mine.networkCounts[BASE]).toBe(myBaseRuns.length);
     expect(myBaseRuns).not.toContain(`${PREFIX}other_run`);
+  });
+
+  // A gas charge is recorded when it settles, so for a run that started just
+  // inside a closed window the ledger row can land after the window's end.
+  it("still reads a charge that settled after the window closed", async () => {
+    const runStartedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const windowEnd = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const settledAfter = new Date(Date.now() - 30 * 60 * 1000);
+
+    await db.insert(workflowExecutions).values({
+      id: `${PREFIX}late_charge`,
+      workflowId: NIGHTLY_ID,
+      userId: USER_ID,
+      status: "success",
+      duration: "1000",
+      startedAt: runStartedAt,
+      completedAt: runStartedAt,
+    });
+    await db.insert(workflowExecutionLogs).values({
+      id: `${PREFIX}late_charge_log`,
+      executionId: `${PREFIX}late_charge`,
+      nodeId: "n1",
+      nodeName: "Step",
+      nodeType: "web3/transfer",
+      status: "success",
+      network: BASE,
+      gasUsedWei: "21000",
+      startedAt: runStartedAt,
+    });
+    await queryClient`
+      INSERT INTO gas_credit_usage
+        (id, organization_id, chain_id, tx_hash, execution_id, gas_used,
+         gas_price_wei, gas_cost_wei, gas_cost_micro_usd, eth_price_usd, created_at)
+      VALUES (${`${PREFIX}late_credit`}, ${ORG_ID}, 8453, '0xlate',
+              ${`${PREFIX}late_charge`}, '21000', '1', '21000', '1', '1',
+              ${settledAfter.toISOString()})`;
+
+    const { runs } = await getUnifiedRuns(ORG_ID, "custom", {
+      gas: ["sponsored"],
+      limit: 50,
+      customStart: runStartedAt.toISOString(),
+      customEnd: windowEnd.toISOString(),
+    });
+    expect(runs.map((run) => run.id)).toContain(`${PREFIX}late_charge`);
+
+    // Removed again so the count assertions further down keep their fixture.
+    await queryClient`DELETE FROM gas_credit_usage WHERE id = ${`${PREFIX}late_credit`}`;
+    await queryClient`DELETE FROM workflow_execution_logs WHERE id = ${`${PREFIX}late_charge_log`}`;
+    await queryClient`DELETE FROM workflow_executions WHERE id = ${`${PREFIX}late_charge`}`;
   });
 
   it("reports the total under the filters, not the unfiltered count", async () => {

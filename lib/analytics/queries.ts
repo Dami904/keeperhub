@@ -324,8 +324,11 @@ function workflowLedgerTotals(scope: LogScope): SQL {
       FROM ${gasCreditUsage}
      WHERE ${gasCreditUsage.executionId} IS NOT NULL
        AND ${gasCreditUsage.organizationId} = ${scope.organizationId}
+       -- Lower bound only, for the same reason the step scan has none: the
+       -- charge is written when it settles, which can be after the window
+       -- closes for a run that started just inside it. An upper bound here
+       -- would drop that row and refile a sponsored run as wallet or free.
        AND ${gasCreditUsage.createdAt} >= ${scope.rangeStart.toISOString()}
-       AND ${gasCreditUsage.createdAt} < ${scope.rangeEnd.toISOString()}
      GROUP BY ${gasCreditUsage.executionId}
   )`;
 }
