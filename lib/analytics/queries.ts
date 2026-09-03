@@ -1734,7 +1734,11 @@ export function getRunFacets(
 
 function hasFilters(filters: RunQueryFilters): boolean {
   return Boolean(
-    (filters.sources?.length ?? 0) > 0 ||
+    // Statuses reach this call for the network and gas dimensions, which do not
+    // lift them - and the cache key does not name them, so a status-filtered
+    // count must not be stored under, or served from, the unfiltered key.
+    (filters.statuses?.length ?? 0) > 0 ||
+      (filters.sources?.length ?? 0) > 0 ||
       (filters.networks?.length ?? 0) > 0 ||
       filters.durationMinMs !== undefined ||
       filters.durationMaxMs !== undefined ||
@@ -1989,10 +1993,6 @@ export async function getStepLogs(
   executionId: string,
   organizationId: string
 ): Promise<StepLog[]> {
-  // Both read the denormalised column first and the JSONB second, matching the
-  // runs table, so a row the backfill has reached and one it has not resolve
-  // the same way.
-  const stepNetwork = sql`COALESCE(${workflowExecutionLogs.network}, ${logInputField("network")})`;
   // `triggerGasUsed` is the last arm on purpose: it is the fee on the
   // transaction that fired an on-chain trigger, which the keeper did not send.
   // It is deliberately absent from `gasUsed` so no rollup counts it as the

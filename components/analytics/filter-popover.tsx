@@ -2,6 +2,7 @@
 
 import { Check, ChevronDown } from "lucide-react";
 import type { ReactNode } from "react";
+import { useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,11 +31,21 @@ export function FilterPopover({
   selectedCount,
   onClear,
   onSelectAll,
+  onOpen,
   children,
 }: FilterPopoverProps): ReactNode {
   const slug = label.toLowerCase().replace(/\s+/g, "-");
+  // Only the opening edge asks: closing the panel must not spend another query.
+  const handleOpenChange = useCallback(
+    (open: boolean): void => {
+      if (open) {
+        onOpen?.();
+      }
+    },
+    [onOpen]
+  );
   return (
-    <Popover>
+    <Popover onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           className={cn(

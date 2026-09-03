@@ -40,8 +40,14 @@ export function useLazyFacet(dimension: FacetDimension): () => void {
   const customStart = useAtomValue(analyticsCustomStartAtom);
   const customEnd = useAtomValue(analyticsCustomEndAtom);
   const lastQuery = useRef<string | null>(null);
+  const inFlight = useRef<AbortController | null>(null);
 
   return useCallback((): void => {
+    // The status filter is carried, unlike the status facet's own request:
+    // only the dimension being counted is lifted, and the server lifts network
+    // and gas itself. Lifting status here too would label a chain with a count
+    // taken across every status, which the listing contradicts the moment the
+    // reader ticks it.
     const query = buildRunsQuery({
       range,
       statuses,
@@ -53,7 +59,6 @@ export function useLazyFacet(dimension: FacetDimension): () => void {
       projectId,
       customStart,
       customEnd,
-      omitStatus: true,
       dimensions: [dimension],
     });
     // Opening the same dropdown twice over unchanged filters asks nothing.
@@ -62,16 +67,37 @@ export function useLazyFacet(dimension: FacetDimension): () => void {
     }
     lastQuery.current = query;
 
-    fetch(`/api/analytics/facets?${query}`)
+    // One request at a time per dimension: reopening after the window moved
+    // must not let the older response land last and win.
+    inFlight.current?.abort();
+    const controller = new AbortController();
+    inFlight.current = controller;
+
+    fetch(`/api/analytics/facets?${query}`, { signal: controller.signal })
       .then((res) => (res.ok ? (res.json() as Promise<RunFacets>) : null))
       .then((data) => {
-        if (data) {
-          setFacets((current) => ({ ...current, ...data }));
+        if (!data) {
+          return;
         }
+        // Take this dimension's key alone. The response fills the dimensions it
+        // was not asked to compute with {}, so merging the whole object would
+        // blank the counts another dropdown, or the poll, had already loaded.
+        setFacets((current) => ({
+          statusCounts:
+            dimension === "status" ? data.statusCounts : current.statusCounts,
+          networkCounts:
+            dimension === "network"
+              ? data.networkCounts
+              : current.networkCounts,
+          gasCounts: dimension === "gas" ? data.gasCounts : current.gasCounts,
+        }));
       })
       .catch(() => {
         // A missing count leaves the option unlabelled; the filter still works.
-        lastQuery.current = null;
+        // An abort is not a failure: the newer request owns `lastQuery` now.
+        if (!controller.signal.aborted) {
+          lastQuery.current = null;
+        }
       });
   }, [
     dimension,
