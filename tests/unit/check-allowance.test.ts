@@ -290,13 +290,16 @@ describe("check-allowance - failOnError", () => {
     expect(result.success).toBe(false);
   });
 
-  it("still hard-fails an invalid owner address when the toggle is off", async () => {
+  it("softens an invalid owner address, which is a call argument", async () => {
     setupMocks();
 
     const result = (await checkAllowanceStep(
       makeInput({ ownerAddress: "not-an-address", failOnError: false })
     )) as SoftResult;
 
-    expect(result.success).toBe(false);
+    // owner and spender are arguments to allowance(); the token contract is
+    // the destination. Only the latter aborts the run.
+    expect(result.success).toBe(true);
+    expect(result.allowance).toBeNull();
   });
 });

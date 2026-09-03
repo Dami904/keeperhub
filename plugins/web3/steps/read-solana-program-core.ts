@@ -15,8 +15,9 @@ import {
   resolveSolanaAccountAddress,
 } from "@/lib/web3/solana-account-reader";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 
 export type ReadSolanaProgramCoreInput = ReadFailOnErrorInput & {
@@ -39,7 +40,7 @@ export type ReadSolanaProgramResult =
       addressLink: string;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 /** Data fields a softened read reports, so a soft failure never looks like a decoded account. */
 const SOFT_ACCOUNT_FIELDS = {
@@ -88,11 +89,21 @@ function serializeAnchorValue(value: unknown): unknown {
 export async function readSolanaProgramCore(
   input: ReadSolanaProgramCoreInput
 ): Promise<ReadSolanaProgramResult> {
+  return applyReadFailOnError(
+    await readSolanaProgramInner(input),
+    input.failOnError,
+    SOFT_ACCOUNT_FIELDS
+  );
+}
+
+async function readSolanaProgramInner(
+  input: ReadSolanaProgramCoreInput
+): Promise<ReadSolanaProgramResult> {
   const { network, accountAddress, programId, idl, accountType } = input;
 
   const resolved = resolveSolanaAccountAddress(network, accountAddress);
   if ("error" in resolved) {
-    return { success: false, error: resolved.error };
+    return { success: false, destinationError: true, error: resolved.error };
   }
   const { adapter, pubkey, chainId } = resolved;
 
@@ -100,6 +111,7 @@ export async function readSolanaProgramCore(
   if (!programPk) {
     return {
       success: false,
+      destinationError: true,
       error: `Invalid Solana program address: ${programId}`,
     };
   }
@@ -140,18 +152,10 @@ export async function readSolanaProgramCore(
         chain_id: String(chainId),
       }
     );
-    const soft = softenReadFailure(input.failOnError, fetched.error);
-    if (soft) {
-      return { ...soft, ...SOFT_ACCOUNT_FIELDS };
-    }
     return { success: false, error: fetched.error };
   }
   if (!fetched.accountInfo) {
     const message = `Account not found: ${accountAddress}`;
-    const soft = softenReadFailure(input.failOnError, message);
-    if (soft) {
-      return { ...soft, ...SOFT_ACCOUNT_FIELDS };
-    }
     return { success: false, error: message };
   }
 

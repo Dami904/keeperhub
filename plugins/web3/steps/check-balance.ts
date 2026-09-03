@@ -14,8 +14,9 @@ import { getErrorMessage } from "@/lib/utils";
 import { getChainAdapter } from "@/lib/web3/chain-adapter";
 import { validateChainAddress } from "@/lib/web3/validate-chain-address";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 
 type CheckBalanceResult =
@@ -29,7 +30,7 @@ type CheckBalanceResult =
       addressLink: string;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 export type CheckBalanceCoreInput = ReadFailOnErrorInput & {
   network: string;
@@ -79,6 +80,7 @@ async function stepHandler(
     );
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }
@@ -97,6 +99,7 @@ async function stepHandler(
     );
     return {
       success: false,
+      destinationError: true,
       error: isSolana
         ? `Invalid Solana address: ${address}`
         : `Invalid Ethereum address: ${address}`,
@@ -122,6 +125,7 @@ async function stepHandler(
       );
       return {
         success: false,
+      destinationError: true,
         error: getErrorMessage(error),
       };
     }
@@ -155,16 +159,6 @@ async function stepHandler(
       }
     );
     const message = `Failed to check balance: ${getErrorMessage(error)}`;
-    const soft = softenReadFailure(input.failOnError, message);
-    if (soft) {
-      return {
-        ...soft,
-        balance: null,
-        balanceWei: null,
-        address,
-        addressLink: await adapter.getAddressUrl(address),
-      };
-    }
     return { success: false, error: message };
   }
 }
@@ -186,7 +180,13 @@ export async function checkBalanceStep(
   return runPluginStep(
     { pluginName: "web3", actionName: "check-balance" },
     enrichedInput,
-    () => stepHandler(input)
+    async () =>
+      applyReadFailOnError(await stepHandler(input), input.failOnError, {
+        balance: null,
+        balanceWei: null,
+        address: input.address,
+        addressLink: "",
+      })
   );
 }
 

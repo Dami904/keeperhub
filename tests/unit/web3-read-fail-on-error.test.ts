@@ -71,34 +71,65 @@ vi.mock("@/lib/workflow/executor/step-handler", async () =>
 
 import { checkBalanceStep } from "@/plugins/web3/steps/check-balance";
 import { queryEventsStep } from "@/plugins/web3/steps/query-events";
-import { softenReadFailure } from "@/plugins/web3/steps/read-fail-on-error-core";
+import { applyReadFailOnError } from "@/plugins/web3/steps/read-fail-on-error-core";
 
 const VALID_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
 const RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/secret-key";
 
-describe("softenReadFailure", () => {
-  it("returns nothing when the toggle is left at its default", () => {
-    expect(softenReadFailure(undefined, "boom")).toBeUndefined();
-    expect(softenReadFailure(true, "boom")).toBeUndefined();
-    expect(softenReadFailure("true", "boom")).toBeUndefined();
+describe("applyReadFailOnError", () => {
+  type Probe =
+    | { success: true; data: unknown; error?: string }
+    | { success: false; destinationError?: true; error: string };
+  const soft = { data: null };
+  const failure: Probe = { success: false, error: "boom" };
+
+  it("leaves the failure alone when the toggle is at its default", () => {
+    expect(applyReadFailOnError<Probe>(failure, undefined, soft)).toBe(failure);
+    expect(applyReadFailOnError<Probe>(failure, true, soft)).toBe(failure);
+    expect(applyReadFailOnError<Probe>(failure, "true", soft)).toBe(failure);
   });
 
   it("softens for both the boolean and the string the editor persists", () => {
-    expect(softenReadFailure(false, "boom")).toEqual({
+    expect(applyReadFailOnError<Probe>(failure, false, soft)).toEqual({
+      data: null,
       success: true,
       error: "boom",
     });
-    expect(softenReadFailure("false", "boom")).toEqual({
+    expect(applyReadFailOnError<Probe>(failure, "false", soft)).toEqual({
+      data: null,
       success: true,
       error: "boom",
     });
   });
 
-  it("redacts provider URLs, which nothing downstream would redact", () => {
-    const soft = softenReadFailure(false, `RPC failed: ${RPC_URL}`);
+  it("never softens a destination failure, whatever the toggle says", () => {
+    // Mirrors HTTP Request refusing to soften an unusable URL: a null-data
+    // success would hide a node that can never work.
+    const unreachable: Probe = {
+      success: false,
+      destinationError: true,
+      error: "Invalid contract address",
+    };
 
-    expect(soft?.error).not.toContain("alchemy.com");
-    expect(soft?.error).not.toContain("secret-key");
+    expect(applyReadFailOnError<Probe>(unreachable, false, soft)).toBe(
+      unreachable
+    );
+  });
+
+  it("leaves a success untouched", () => {
+    const ok: Probe = { success: true, data: 1 };
+
+    expect(applyReadFailOnError<Probe>(ok, false, soft)).toBe(ok);
+  });
+
+  it("redacts provider URLs, which nothing downstream would redact", () => {
+    const withUrl: Probe = { success: false, error: `RPC failed: ${RPC_URL}` };
+    const result = applyReadFailOnError<Probe>(withUrl, false, soft) as {
+      error: string;
+    };
+
+    expect(result.error).not.toContain("alchemy.com");
+    expect(result.error).not.toContain("secret-key");
   });
 });
 
@@ -242,10 +273,25 @@ describe("queryEventsStep - failOnError", () => {
     expect(result.success).toBe(false);
   });
 
-  it("still hard-fails an event missing from the ABI when the toggle is off", async () => {
+  it("softens an event missing from the ABI, which is payload not destination", async () => {
     const result = await queryEventsStep({
       ...eventInput,
       eventName: "NotAnEvent",
+      failOnError: false,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.events).toBeNull();
+    expect(result.error).toContain("NotAnEvent");
+  });
+
+  it("still hard-fails an invalid contract address when the toggle is off", async () => {
+    const result = await queryEventsStep({
+      ...eventInput,
+      contractAddress: "not-an-address",
       failOnError: false,
     });
 

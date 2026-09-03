@@ -10,8 +10,9 @@ import { getRpcPreferenceUserId } from "@/lib/workflow/executor/helpers";
 import { runPluginStep, type StepInput } from "@/lib/workflow/executor/step-handler";
 import { getErrorMessage } from "@/lib/utils";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "@/plugins/web3/steps/read-fail-on-error-core";
 import {
   type AbiOutputParam,
@@ -41,7 +42,7 @@ type BatchReadContractResult =
       totalCalls: number | null;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 export type BatchReadContractCoreInput = ReadFailOnErrorInput & {
   network?: string;
@@ -639,7 +640,7 @@ async function executeUniformMode(
 
   const chainRpc = await resolveChainRpc(network, userId);
   if (chainRpc.error !== undefined) {
-    return { success: false, error: chainRpc.error };
+    return { success: false, destinationError: true, error: chainRpc.error };
   }
 
   const { results, error: batchError } = await executeMulticallBatches(
@@ -650,10 +651,6 @@ async function executeUniformMode(
   );
 
   if (batchError) {
-    const soft = softenReadFailure(input.failOnError, batchError);
-    if (soft) {
-      return { ...soft, results: null, totalCalls: null };
-    }
     return { success: false, error: batchError };
   }
 
@@ -725,10 +722,7 @@ async function executeMixedMode(
     results: CallResult[];
     group: IndexedEncodedCall[];
   };
-  // `soft` marks a failure of the multicall execution itself, the only kind
-  // the failOnError toggle may soften. An unresolved network or RPC config is
-  // a config problem and always hard-fails.
-  type GroupFailure = { ok: false; error: string; soft?: boolean };
+  type GroupFailure = { ok: false; error: string };
   type GroupOutcome = GroupSuccess | GroupFailure;
 
   // Execute all network groups in parallel
@@ -749,7 +743,7 @@ async function executeMixedMode(
         chainRpc.chainId
       );
       if (batchResult.error !== undefined) {
-        return { ok: false, error: batchResult.error, soft: true };
+        return { ok: false, error: batchResult.error };
       }
 
       return { ok: true, results: batchResult.results, group };
@@ -758,12 +752,6 @@ async function executeMixedMode(
 
   for (const outcome of groupOutcomes) {
     if (!outcome.ok) {
-      const soft = outcome.soft
-        ? softenReadFailure(input.failOnError, outcome.error)
-        : undefined;
-      if (soft) {
-        return { ...soft, results: null, totalCalls: null };
-      }
       return { success: false, error: outcome.error };
     }
     for (const [resultIdx, groupCall] of outcome.group.entries()) {
@@ -802,7 +790,11 @@ export async function batchReadContractStep(
   return runPluginStep(
     { pluginName: "web3", actionName: "batch-read-contract" },
     input,
-    stepHandler
+    async (i) =>
+      applyReadFailOnError(await stepHandler(i), i.failOnError, {
+        results: null,
+        totalCalls: null,
+      })
   );
 }
 

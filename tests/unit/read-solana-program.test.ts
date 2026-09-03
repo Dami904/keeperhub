@@ -275,10 +275,19 @@ describe("readSolanaProgramCore - failOnError", () => {
     expect((result as { error?: string }).error).toContain("Account not found");
   });
 
-  it("still hard-fails a malformed IDL when the toggle is off", async () => {
+  it("softens a malformed IDL, which is payload not destination", async () => {
     const result = await readSolanaProgramCore({
       ...validInput,
       idl: "{bad",
+    });
+
+    expect(result).toMatchObject({ success: true, result: null });
+  });
+
+  it("still hard-fails an invalid account address when the toggle is off", async () => {
+    const result = await readSolanaProgramCore({
+      ...validInput,
+      accountAddress: "not-a-pubkey!!",
     });
 
     expect(result).toMatchObject({ success: false });

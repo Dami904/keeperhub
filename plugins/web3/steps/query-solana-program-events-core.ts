@@ -12,8 +12,9 @@ import { getSolanaProvider } from "@/lib/rpc/provider-factory";
 import type { SolanaProviderManager } from "@/lib/rpc/providers/solana";
 import { getErrorMessage } from "@/lib/utils";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 import {
   type AnchorEventDecoder,
@@ -78,7 +79,7 @@ export type QuerySolanaProgramEventsResult =
       otherEventNamesSeen: string[] | null;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 /** Data fields a softened query reports, so a soft failure never looks like an empty result set. */
 const SOFT_QUERY_FIELDS = {
@@ -164,12 +165,18 @@ type ResolvedQuery = {
 
 function resolveQueryContext(
   input: QuerySolanaProgramEventsCoreInput
-): { success: true; value: ResolvedQuery } | { success: false; error: string } {
+):
+  | { success: true; value: ResolvedQuery }
+  | (ReadDestinationFailure & { success: false; error: string }) {
   let programKey: PublicKey;
   try {
     programKey = new PublicKey(input.programId);
   } catch {
-    return { success: false, error: `Invalid program ID: ${input.programId}` };
+    return {
+      success: false,
+      destinationError: true,
+      error: `Invalid program ID: ${input.programId}`,
+    };
   }
 
   const beforeCheck = validateSignatureCursor(
@@ -426,9 +433,19 @@ async function mapWithConcurrency<T, R>(
 export async function queryProgramEventsCore(
   input: QuerySolanaProgramEventsCoreInput
 ): Promise<QuerySolanaProgramEventsResult> {
+  return applyReadFailOnError(
+    await queryProgramEventsInner(input),
+    input.failOnError,
+    SOFT_QUERY_FIELDS
+  );
+}
+
+async function queryProgramEventsInner(
+  input: QuerySolanaProgramEventsCoreInput
+): Promise<QuerySolanaProgramEventsResult> {
   const resolved = resolveQueryContext(input);
   if (!resolved.success) {
-    return { success: false, error: resolved.error };
+    return resolved;
   }
   const { programKey, decoder, lookback, chainId } = resolved.value;
   const eventName = input.eventName;
@@ -456,10 +473,6 @@ export async function queryProgramEventsCore(
     truncated = page.truncated;
   } catch (error) {
     const message = `Signature lookup failed: ${getErrorMessage(error)}`;
-    const soft = softenReadFailure(input.failOnError, message);
-    if (soft) {
-      return { ...soft, ...SOFT_QUERY_FIELDS };
-    }
     return { success: false, error: message };
   }
 

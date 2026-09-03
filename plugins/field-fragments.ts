@@ -87,7 +87,7 @@ export function readFailOnErrorField(): ActionConfigField {
   return {
     defaultValue: "true",
     helpTip:
-      "When off, a failed read (RPC error, or a call the chain rejects) passes a soft error to the next node instead of failing the run, so one bad item in a For Each loop does not abort it. Config problems (bad address, unknown network, unresolved RPC) always fail the run regardless of this setting.",
+      "When off, a failed read passes a soft error to the next node instead of failing the run, so one bad item in a For Each loop does not abort it. This covers the call itself and the ABI, function and arguments you send. Only problems that leave the step with nowhere to call - an invalid address, an unknown network, or unresolved RPC config - still fail the run, matching HTTP Request, which softens every response but refuses to soften an unusable URL.",
     key: "failOnError",
     label: "Fail workflow on error",
     type: "fail-on-error-switch",

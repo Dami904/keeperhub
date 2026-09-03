@@ -21,8 +21,9 @@ import { SolanaChainAdapter } from "@/lib/web3/chain-adapter/solana";
 import { parseSolanaMintAccount } from "@/lib/web3/solana-mint";
 import { validateChainAddress } from "@/lib/web3/validate-chain-address";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 import {
   getTokenAddress,
@@ -67,7 +68,7 @@ type GetSplTokenBalanceResult =
       addressLink: string;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 /**
  * Read a borsh string (u32 LE length prefix + utf8 bytes) at offset,
@@ -263,6 +264,7 @@ async function stepHandler(
     );
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }
@@ -366,15 +368,6 @@ async function stepHandler(
       }
     );
     const message = `Failed to check token balance: ${getErrorMessage(error)}`;
-    const soft = softenReadFailure(input.failOnError, message);
-    if (soft) {
-      return {
-        ...soft,
-        balance: null,
-        address,
-        addressLink: await adapter.getAddressUrl(address),
-      };
-    }
     return { success: false, error: message };
   }
 }
@@ -391,7 +384,12 @@ export async function getSplTokenBalanceStep(
   return runPluginStep(
     { pluginName: "web3", actionName: "get-spl-token-balance" },
     input,
-    stepHandler
+    async (i) =>
+      applyReadFailOnError(await stepHandler(i), i.failOnError, {
+        balance: null,
+        address: i.address,
+        addressLink: "",
+      })
   );
 }
 

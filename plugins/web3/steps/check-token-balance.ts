@@ -13,8 +13,9 @@ import { getErrorMessage } from "@/lib/utils";
 import { getChainAdapter } from "@/lib/web3/chain-adapter";
 import { validateChainAddress } from "@/lib/web3/validate-chain-address";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 import {
   getTokenAddress,
@@ -33,7 +34,7 @@ type CheckTokenBalanceResult =
       addressLink: string;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 export type CheckTokenBalanceCoreInput = TokenConfigSource &
   ReadFailOnErrorInput & {
@@ -116,8 +117,7 @@ async function checkEvmTokenBalance(
   address: string,
   tokenAddress: string,
   chainId: number,
-  userId: string | undefined,
-  failOnError: unknown
+  userId: string | undefined
 ): Promise<CheckTokenBalanceResult> {
   let rpcManager: RpcProviderManager;
   try {
@@ -135,6 +135,7 @@ async function checkEvmTokenBalance(
     );
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }
@@ -171,15 +172,6 @@ async function checkEvmTokenBalance(
       }
     );
     const message = `Failed to check token balance: ${getErrorMessage(error)}`;
-    const soft = softenReadFailure(failOnError, message);
-    if (soft) {
-      return {
-        ...soft,
-        balance: null,
-        address,
-        addressLink: await adapter.getAddressUrl(address),
-      };
-    }
     return { success: false, error: message };
   }
 }
@@ -225,6 +217,7 @@ async function stepHandler(
     );
     return {
       success: false,
+      destinationError: true,
       error: getErrorMessage(error),
     };
   }
@@ -232,6 +225,7 @@ async function stepHandler(
   if (isSolanaChain(chainId)) {
     return {
       success: false,
+      destinationError: true,
       error:
         "Solana chains are not supported by this action. Use the Get SPL Token Balance action for SPL tokens.",
     };
@@ -250,6 +244,7 @@ async function stepHandler(
     );
     return {
       success: false,
+      destinationError: true,
       error: `Invalid wallet address: ${address}`,
     };
   }
@@ -282,24 +277,18 @@ async function stepHandler(
     );
     return {
       success: false,
+      destinationError: true,
       error: `Invalid token address: ${tokenAddress}`,
     };
   }
 
-  return checkEvmTokenBalance(
-    address,
-    tokenAddress,
-    chainId,
-    userId,
-    input.failOnError
-  );
+  return checkEvmTokenBalance(address, tokenAddress, chainId, userId);
 }
 
 /**
  * Check Token Balance Step
  * Checks the ERC20 token balance of an address for a single token
  */
-// biome-ignore lint/suspicious/useAwait: "use step" directive requires async
 export async function checkTokenBalanceStep(
   input: CheckTokenBalanceInput
 ): Promise<CheckTokenBalanceResult> {
@@ -308,7 +297,12 @@ export async function checkTokenBalanceStep(
   return runPluginStep(
     { pluginName: "web3", actionName: "check-token-balance" },
     input,
-    stepHandler
+    async (i) =>
+      applyReadFailOnError(await stepHandler(i), i.failOnError, {
+        balance: null,
+        address: i.address,
+        addressLink: "",
+      })
   );
 }
 

@@ -20,8 +20,9 @@ import { evmOnlyGuard } from "@/lib/web3/validate-chain-address";
 import { getErrorMessage } from "@/lib/utils";
 import { resolveBlockRange } from "./block-range-helpers";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY;
@@ -56,7 +57,7 @@ export type QueryTransactionsResult =
       contractAddressLink: string;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 export type QueryTransactionsCoreInput = ReadFailOnErrorInput & {
   network: string;
@@ -251,7 +252,9 @@ type ValidatedInput = {
 
 function validateInputs(
   input: QueryTransactionsCoreInput
-): { success: true; data: ValidatedInput } | { success: false; error: string } {
+):
+  | { success: true; data: ValidatedInput }
+  | (ReadDestinationFailure & { success: false; error: string }) {
   const { contractAddress, abi, abiFunction } = input;
 
   // Resolve the chain first so the address check and the Solana guard below
@@ -273,6 +276,7 @@ function validateInputs(
   if (!ethers.isAddress(contractAddress)) {
     return {
       success: false,
+      destinationError: true,
       error: `Invalid contract address: ${contractAddress}`,
     };
   }
@@ -309,9 +313,19 @@ const SOFT_QUERY_FIELDS = {
 export async function queryTransactionsCore(
   input: QueryTransactionsCoreInput
 ): Promise<QueryTransactionsResult> {
+  return applyReadFailOnError(
+    await queryTransactionsInner(input),
+    input.failOnError,
+    { ...SOFT_QUERY_FIELDS, contractAddressLink: "" }
+  );
+}
+
+async function queryTransactionsInner(
+  input: QueryTransactionsCoreInput
+): Promise<QueryTransactionsResult> {
   const validation = validateInputs(input);
   if (!validation.success) {
-    return { success: false, error: validation.error };
+    return validation;
   }
 
   const { iface, functionFragment, chainId } = validation.data;
@@ -338,10 +352,6 @@ export async function queryTransactionsCore(
       )
   );
   if (!blockRangeResult.success) {
-    const soft = softenReadFailure(input.failOnError, blockRangeResult.error);
-    if (soft) {
-      return { ...soft, ...SOFT_QUERY_FIELDS, contractAddressLink: "" };
-    }
     return { success: false, error: blockRangeResult.error };
   }
   const { range } = blockRangeResult;
@@ -384,10 +394,6 @@ export async function queryTransactionsCore(
   );
 
   if (!txResult.success) {
-    const soft = softenReadFailure(input.failOnError, txResult.error);
-    if (soft) {
-      return { ...soft, ...SOFT_QUERY_FIELDS, contractAddressLink };
-    }
     return { success: false, error: txResult.error };
   }
 

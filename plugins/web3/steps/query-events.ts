@@ -19,8 +19,9 @@ import {
   queryBatchWithRetry,
 } from "./query-events-core";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 
 const DEFAULT_BATCH_SIZE = 2000;
@@ -45,7 +46,7 @@ type QueryEventsResult =
       eventCount: number | null;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 /** Data fields a softened query reports, so a soft failure never looks like an empty result set. */
 const SOFT_QUERY_FIELDS = {
@@ -202,6 +203,7 @@ async function stepHandler(
   if (!ethers.isAddress(contractAddress)) {
     return {
       success: false,
+      destinationError: true,
       error: `Invalid contract address: ${contractAddress}`,
     };
   }
@@ -251,10 +253,6 @@ async function stepHandler(
       )
   );
   if (!blockRangeResult.success) {
-    const soft = softenReadFailure(input.failOnError, blockRangeResult.error);
-    if (soft) {
-      return { ...soft, ...SOFT_QUERY_FIELDS };
-    }
     return { success: false, error: blockRangeResult.error };
   }
   const { range } = blockRangeResult;
@@ -295,10 +293,6 @@ async function stepHandler(
     };
   } catch (error) {
     const message = `Event query failed: ${getErrorMessage(error)}`;
-    const soft = softenReadFailure(input.failOnError, message);
-    if (soft) {
-      return { ...soft, ...SOFT_QUERY_FIELDS };
-    }
     return { success: false, error: message };
   }
 }
@@ -318,7 +312,12 @@ export async function queryEventsStep(
   return runPluginStep(
     { pluginName: "web3", actionName: "query-events" },
     enrichedInput,
-    () => stepHandler(input)
+    async () =>
+      applyReadFailOnError(
+        await stepHandler(input),
+        input.failOnError,
+        SOFT_QUERY_FIELDS
+      )
   );
 }
 

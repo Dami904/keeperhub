@@ -20,8 +20,9 @@ import { getErrorMessage } from "@/lib/utils";
 import { SolanaChainAdapter } from "@/lib/web3/chain-adapter/solana";
 import { validateChainTxHash } from "@/lib/web3/validate-chain-address";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 
 /**
@@ -65,7 +66,7 @@ type GetTransactionResult =
       toLink: string;
       error?: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 /** Data fields a softened lookup reports, so a soft failure never looks like a real transaction. */
 const SOFT_TRANSACTION_FIELDS = {
@@ -95,8 +96,7 @@ export type GetTransactionInput = StepInput & GetTransactionCoreInput;
 async function fetchEvmTransaction(
   hash: string,
   chainId: number,
-  userId: string | undefined,
-  failOnError: unknown
+  userId: string | undefined
 ): Promise<GetTransactionResult> {
   let rpcManager: RpcProviderManager;
   try {
@@ -111,10 +111,7 @@ async function fetchEvmTransaction(
 
   if (!tx) {
     const message = `Transaction not found: ${hash}`;
-    const soft = softenReadFailure(failOnError, message);
-    return soft
-      ? { ...soft, ...SOFT_TRANSACTION_FIELDS }
-      : { success: false, error: message };
+    return { success: false, error: message };
   }
 
   const explorerConfig = await db.query.explorerConfigs.findFirst({
@@ -154,8 +151,7 @@ async function fetchEvmTransaction(
 async function fetchSolanaTransaction(
   hash: string,
   chainId: number,
-  userId: string | undefined,
-  failOnError: unknown
+  userId: string | undefined
 ): Promise<GetTransactionResult> {
   const adapter = new SolanaChainAdapter(chainId, () =>
     getSolanaProvider({ chainId, userId })
@@ -169,10 +165,7 @@ async function fetchSolanaTransaction(
 
   if (!tx) {
     const message = `Transaction not found: ${hash}`;
-    const soft = softenReadFailure(failOnError, message);
-    return soft
-      ? { ...soft, ...SOFT_TRANSACTION_FIELDS }
-      : { success: false, error: message };
+    return { success: false, error: message };
   }
 
   const feePayer = getSolanaFeePayer(tx);
@@ -212,7 +205,7 @@ async function fetchSolanaTransaction(
 async function stepHandler(
   input: GetTransactionInput
 ): Promise<GetTransactionResult> {
-  const { network, transactionHash, failOnError, _context } = input;
+  const { network, transactionHash, _context } = input;
 
   if (!transactionHash?.trim()) {
     return {
@@ -238,6 +231,7 @@ async function stepHandler(
   if (!validateChainTxHash(hash, chainId)) {
     return {
       success: false,
+      destinationError: true,
       error: `Invalid transaction hash format: ${hash}`,
     };
   }
@@ -246,14 +240,10 @@ async function stepHandler(
 
   try {
     return isSolanaChain(chainId)
-      ? await fetchSolanaTransaction(hash, chainId, userId, failOnError)
-      : await fetchEvmTransaction(hash, chainId, userId, failOnError);
+      ? await fetchSolanaTransaction(hash, chainId, userId)
+      : await fetchEvmTransaction(hash, chainId, userId);
   } catch (error) {
     const message = `Failed to fetch transaction: ${getErrorMessage(error)}`;
-    const soft = softenReadFailure(failOnError, message);
-    if (soft) {
-      return { ...soft, ...SOFT_TRANSACTION_FIELDS };
-    }
     return { success: false, error: message };
   }
 }
@@ -279,7 +269,12 @@ export async function getTransactionStep(
   return runPluginStep(
     { pluginName: "web3", actionName: "get-transaction" },
     enrichedInput,
-    () => stepHandler(input)
+    async () =>
+      applyReadFailOnError(
+        await stepHandler(input),
+        input.failOnError,
+        SOFT_TRANSACTION_FIELDS
+      )
   );
 }
 

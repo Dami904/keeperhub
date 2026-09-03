@@ -1255,7 +1255,7 @@ describe("batch-read-contract - failOnError", () => {
     expect(result.success).toBe(false);
   });
 
-  it("still hard-fails a malformed ABI when the toggle is off", async () => {
+  it("softens a malformed ABI, which is payload not destination", async () => {
     setupRpcMocks();
 
     const result = (await runBatch({
@@ -1264,6 +1264,7 @@ describe("batch-read-contract - failOnError", () => {
       failOnError: false,
     })) as SoftResult;
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    expect(result.results).toBeNull();
   });
 });

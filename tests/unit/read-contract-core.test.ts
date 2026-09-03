@@ -533,19 +533,47 @@ describe("read-contract-core - failOnError", () => {
     expect(result.error).toContain("Vat/not-authorized");
   });
 
-  it("still hard-fails a config error when failOnError is false", async () => {
+  it("softens a function missing from the ABI, like HTTP Request softens a 400", async () => {
     setupRpcMocks();
 
     const result = await readContractCore(
       makeInput({ abiFunction: "notInAbi", failOnError: false })
     );
 
-    expect(result.success).toBe(false);
-    if (result.success) {
+    // The ABI, the function name and the args are the payload, not the
+    // destination. HTTP Request hard-fails only an unusable URL; a request the
+    // far side rejects softens. This is the read-side equivalent, and it is
+    // what makes a For Each survive one item the contract will not accept.
+    expect(result.success).toBe(true);
+    if (!result.success) {
       return;
     }
+    expect(result.result).toBeNull();
     expect(result.error).toContain("not found in ABI");
-    expect(result.errorClass).toBe("user");
+  });
+
+  it("still hard-fails an invalid contract address when failOnError is false", async () => {
+    setupRpcMocks();
+
+    const result = await readContractCore(
+      makeInput({ contractAddress: "not-an-address", failOnError: false })
+    );
+
+    // The address is the destination: with nowhere to call, a null-data
+    // success would let a permanently broken node run unnoticed.
+    expect(result.success).toBe(false);
+  });
+
+  it("still hard-fails an unresolvable network when failOnError is false", async () => {
+    mockGetChainIdFromNetwork.mockImplementation(() => {
+      throw new Error("Unsupported network");
+    });
+
+    const result = await readContractCore(
+      makeInput({ network: "not-a-chain", failOnError: false })
+    );
+
+    expect(result.success).toBe(false);
   });
 
   it("still hard-fails an unresolved RPC config when failOnError is false", async () => {

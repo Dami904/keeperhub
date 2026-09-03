@@ -10,8 +10,9 @@ import {
   resolveSolanaAccountAddress,
 } from "@/lib/web3/solana-account-reader";
 import {
+  applyReadFailOnError,
+  type ReadDestinationFailure,
   type ReadFailOnErrorInput,
-  softenReadFailure,
 } from "./read-fail-on-error-core";
 
 export type ReadSolanaAccountCoreInput = ReadFailOnErrorInput & {
@@ -38,16 +39,26 @@ export type ReadSolanaAccountResult =
       dataLength: number;
       addressLink: string;
     }
-  | { success: false; error: string };
+  | (ReadDestinationFailure & { success: false; error: string });
 
 export async function readSolanaAccountCore(
+  input: ReadSolanaAccountCoreInput
+): Promise<ReadSolanaAccountResult> {
+  return applyReadFailOnError(
+    await readSolanaAccountInner(input),
+    input.failOnError,
+    { exists: null }
+  );
+}
+
+async function readSolanaAccountInner(
   input: ReadSolanaAccountCoreInput
 ): Promise<ReadSolanaAccountResult> {
   const { network, accountAddress } = input;
 
   const resolved = resolveSolanaAccountAddress(network, accountAddress);
   if ("error" in resolved) {
-    return { success: false, error: resolved.error };
+    return { success: false, destinationError: true, error: resolved.error };
   }
   const { adapter, pubkey, chainId } = resolved;
 
@@ -67,10 +78,6 @@ export async function readSolanaAccountCore(
         chain_id: String(chainId),
       }
     );
-    const soft = softenReadFailure(input.failOnError, fetched.error);
-    if (soft) {
-      return { ...soft, exists: null };
-    }
     return { success: false, error: fetched.error };
   }
 
