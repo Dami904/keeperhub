@@ -5,6 +5,7 @@ import type { AbiEvent } from "../chains/validation";
 import type { DedupStore } from "./dedup";
 import { EventListener } from "./event-listener";
 import { formatError } from "./format-error";
+import { TokenBucketPacer } from "./pacer";
 
 /**
  * In-process registry of EventListener instances, keyed by workflow ID.
@@ -70,9 +71,24 @@ interface RegistryEntry {
 export class ListenerRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
   private readonly deps: RegistryDeps;
+  /** One pacer per chain, shared by every listener on that chain. */
+  private readonly pacers = new Map<number, TokenBucketPacer>();
+
+  /** Events released per second per chain when a batch contends the bucket. */
+  private static readonly DRAIN_RATE_PER_SEC = 50;
 
   constructor(deps: RegistryDeps) {
     this.deps = deps;
+  }
+
+  /** Returns the shared pacer for a chain, creating it on first use. */
+  private pacerFor(chainId: number): TokenBucketPacer {
+    let pacer = this.pacers.get(chainId);
+    if (!pacer) {
+      pacer = new TokenBucketPacer(ListenerRegistry.DRAIN_RATE_PER_SEC);
+      this.pacers.set(chainId, pacer);
+    }
+    return pacer;
   }
 
   /**
@@ -99,6 +115,7 @@ export class ListenerRegistry {
       dedup: this.deps.dedup,
       sqs: this.deps.sqs,
       sqsQueueUrl: this.deps.sqsQueueUrl,
+      pacer: this.pacerFor(reg.chainId),
     });
     try {
       await listener.start();

@@ -19,6 +19,7 @@ import type {
 import type { AbiEvent } from "../chains/validation";
 import type { DedupStore } from "./dedup";
 import { formatError } from "./format-error";
+import type { TokenBucketPacer } from "./pacer";
 
 /**
  * EventListener encapsulates a single workflow's contract-event listener.
@@ -96,9 +97,22 @@ export interface EventListenerOptions {
   providerManager: ChainProviderManager;
 
   /**
+   * Optional per-chain pacer shared by every listener on the same chain.
+   * When set, `pacer.take()` is awaited before forwarding a matched event to
+   * SQS, replacing the fixed random jitter: a lone event forwards
+   * immediately (the bucket holds tokens), a large simultaneous batch is
+   * paced at the bucket's drain rate. When unset the legacy
+   * `jitterMs`/`DEFAULT_JITTER_MS` behaviour applies.
+   */
+  pacer?: TokenBucketPacer;
+
+  /**
    * Maximum jitter applied before forwarding a matched event to SQS.
    * Spreads downstream load when many events fire simultaneously. Tests
    * should pass 0 to keep runs deterministic.
+   *
+   * Ignored when `pacer` is set; kept for the legacy path and for tests of
+   * the jitter branch itself.
    */
   jitterMs?: number;
 }
@@ -197,9 +211,17 @@ export class EventListener {
         return;
       }
 
-      const maxJitter = this.opts.jitterMs ?? DEFAULT_JITTER_MS;
-      if (maxJitter > 0) {
-        await new Promise((r) => setTimeout(r, Math.random() * maxJitter));
+      // Pace the dispatch. With a pacer (the production path, see registry)
+      // a lone event forwards immediately and a large batch drains at the
+      // per-chain rate. Without one, keep the legacy random jitter so the
+      // load-spreading property survives for direct/unit constructions.
+      if (this.opts.pacer) {
+        await this.opts.pacer.take();
+      } else {
+        const maxJitter = this.opts.jitterMs ?? DEFAULT_JITTER_MS;
+        if (maxJitter > 0) {
+          await new Promise((r) => setTimeout(r, Math.random() * maxJitter));
+        }
       }
 
       // Dedup is best-effort. If the read throws we fall through and
