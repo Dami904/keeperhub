@@ -258,9 +258,14 @@ export function useAnalytics(): UseAnalyticsReturn {
       ),
       wrapSection(
         processSection<RunFacets>(facetsPromise, "Facets", ctx, (data) => {
-          // Merge: this response carries status only, and replacing would drop
-          // whichever step-log counts a dropdown had already loaded.
-          setFacets((current) => ({ ...current, ...data }));
+          // Take the status counts alone. The response still carries the other
+          // two keys, empty, because they were not computed - spreading the
+          // whole object would blank whichever step-log counts a dropdown had
+          // already loaded, on every poll tick.
+          setFacets((current) => ({
+            ...current,
+            statusCounts: data.statusCounts,
+          }));
         })
       ),
     ]);

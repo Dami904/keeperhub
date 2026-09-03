@@ -391,6 +391,10 @@ describe.skipIf(SKIP)("analytics run filters", () => {
       { networks: [BASE] },
     ]) {
       const ids = await idsFor(filters as RunQueryFilters);
+      // The neighbour's run shares PREFIX - teardown deletes by it - so the
+      // prefix alone proves nothing about tenancy. Name the row that would
+      // leak.
+      expect(ids).not.toContain(`${PREFIX}other_run`);
       expect(ids.every((id) => id.startsWith(PREFIX))).toBe(true);
     }
 
@@ -478,6 +482,20 @@ describe.skipIf(SKIP)("analytics run filters", () => {
     );
     expect(networkCounts[BASE]).toBeGreaterThan(0);
     expect(networkCounts[ARBITRUM]).toBeGreaterThan(0);
+    expect(networkCounts[OPTIMISM]).toBe(1);
+  });
+
+  // Only the dimension being counted is lifted. Counting chains across every
+  // status would label Base with three runs while ticking it returned one, and
+  // - because the facets cache key does not name the statuses - would serve
+  // that same answer to every other status selection.
+  it("counts chains under the status filter, not across all statuses", async () => {
+    const { networkCounts } = await getRunFacets(ORG_ID, "7d", {
+      dimensions: ["network"],
+      statuses: ["success"],
+    });
+    expect(networkCounts[BASE]).toBe(1);
+    expect(networkCounts[ARBITRUM]).toBe(1);
     expect(networkCounts[OPTIMISM]).toBe(1);
   });
 
