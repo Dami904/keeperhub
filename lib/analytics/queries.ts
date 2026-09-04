@@ -2133,25 +2133,57 @@ export async function getSpendCapData(organizationId: string): Promise<{
 /**
  * Get a lightweight checksum for SSE change detection.
  * Returns max timestamps + active count so we know when to push updates.
+ *
+ * `rangeStart` is the lower bound of the window the stream is watching. A run
+ * that started before the window cannot change what that window summarises, so
+ * bounding by it is exact rather than an approximation.
+ *
+ * The run-side MAX is a lateral per workflow, not a plain aggregate over the
+ * join, because the two plan nothing alike. An aggregate over the join has to
+ * read every row it might be the maximum of; the lateral lets the planner turn
+ * each workflow into an index-only scan with LIMIT 1. Measured on the busiest
+ * organization over 30 days: 424 ms and 152,914 buffers unbounded, 120 ms and
+ * 78,496 bounded, 2 ms and 1,189 as the lateral. This runs every poll interval
+ * for every connected viewer, only to answer "has anything changed", so the
+ * difference is what it costs to have the dashboard open.
+ *
+ * The active-run count is deliberately left unbounded: the summary's activeRuns
+ * is unbounded too, and the two have to agree.
  */
 export async function getAnalyticsChecksum(
-  organizationId: string
+  organizationId: string,
+  rangeStart: Date
 ): Promise<string> {
+  // Bound as ISO text for the same reason the step-log scan is: a raw template
+  // has no column to map a Date through, the way the comparison helpers do.
+  const from = rangeStart.toISOString();
+
   const [wfMax, deMax, activeCount] = await Promise.all([
     db
-      .select({
-        maxStarted: sql<string>`COALESCE(MAX(${workflowExecutions.startedAt}), '1970-01-01')::text`,
-      })
-      .from(workflowExecutions)
-      .innerJoin(workflows, eq(workflowExecutions.workflowId, workflows.id))
-      .where(eq(workflows.organizationId, organizationId))
-      .then((r) => r[0]?.maxStarted ?? ""),
+      .execute<{ max_started: string }>(
+        sql`
+    SELECT COALESCE(MAX(latest.started_at), '1970-01-01')::text AS max_started
+      FROM ${workflows} AS scoped_wf
+      CROSS JOIN LATERAL (
+        SELECT MAX(${workflowExecutions.startedAt}) AS started_at
+          FROM ${workflowExecutions}
+         WHERE ${workflowExecutions.workflowId} = scoped_wf.id
+           AND ${workflowExecutions.startedAt} >= ${from}
+      ) AS latest
+     WHERE scoped_wf.organization_id = ${organizationId}`
+      )
+      .then((r) => r[0]?.max_started ?? ""),
     db
       .select({
         maxCreated: sql<string>`COALESCE(MAX(${directExecutions.createdAt}), '1970-01-01')::text`,
       })
       .from(directExecutions)
-      .where(eq(directExecutions.organizationId, organizationId))
+      .where(
+        and(
+          eq(directExecutions.organizationId, organizationId),
+          gte(directExecutions.createdAt, rangeStart)
+        )
+      )
       .then((r) => r[0]?.maxCreated ?? ""),
     db
       .select({ count: count() })
