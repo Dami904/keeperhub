@@ -66,7 +66,7 @@ function detailState(
     supportedTokenBalances: [],
     isLoadingBalances: false,
     addToken: async () => undefined,
-    removeToken: () => undefined,
+    removeToken: async () => undefined,
     withdraw: () => undefined,
     ...overrides,
   };
