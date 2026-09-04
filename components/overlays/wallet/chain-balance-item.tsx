@@ -386,10 +386,12 @@ export function ChainBalanceItem({
   );
 
   const isTempo = isTempoChain(balance.chainId);
-  const hidesNativeRow = nativeMirrorsSupportedToken(
-    balance.chainId,
-    supportedTokenBalances
-  );
+  // Tempo's rule is categorical (no native gas token); Arc's is a
+  // double-count guard gated on a funded token row. Different
+  // justifications, so kept as separate checks rather than folded into one
+  // membership test.
+  const hidesNativeRow =
+    isTempo || nativeMirrorsSupportedToken(balance.chainId, supportedTokenBalances);
   const isMainnet = balance.chainId === MAINNET_CHAIN_ID;
   const isIndependentTokenList = hasIndependentTokenList(balance.chainId);
 

@@ -194,6 +194,26 @@ describe("buildWithdrawableAssets", () => {
     expect(assets.filter((a) => a.type === "native")).toEqual([]);
   });
 
+  it("skips TEMPO native balances unconditionally, even with no supported-token row at all", () => {
+    // Tempo's suppression is categorical (no native gas token), unlike Arc's
+    // arithmetic dedup which is gated on a funded row. A fresh deployment
+    // whose supported_tokens table has no Tempo rows must still hide the row.
+    const assets = buildWithdrawableAssets(
+      emptyInput({
+        chains: [TEMPO],
+        balances: [
+          nativeBalance({
+            chainId: TEMPO.chainId,
+            name: TEMPO.name,
+            balance: "5",
+          }),
+        ],
+        supportedTokenBalances: [],
+      })
+    );
+    expect(assets.filter((a) => a.type === "native")).toEqual([]);
+  });
+
   it("skips Arc's native USDC once its ERC-20 supported-token row exists", () => {
     const assets = buildWithdrawableAssets(
       emptyInput({
@@ -234,6 +254,35 @@ describe("buildWithdrawableAssets", () => {
           }),
         ],
         supportedTokenBalances: [],
+      })
+    );
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ type: "native", symbol: "USDC" });
+  });
+
+  it("keeps Arc's native balance visible when the token row exists but is a zero-balance placeholder", () => {
+    // A per-token balanceOf failure pushes a "0" row rather than omitting
+    // one (see app/api/user/wallet/balances/route.ts). That row must not be
+    // read as "the mirror is funded" -- doing so would suppress the native
+    // asset while collectSupportedTokenAssets drops the zero token row too,
+    // leaving a real balance both invisible and unwithdrawable.
+    const assets = buildWithdrawableAssets(
+      emptyInput({
+        chains: [ARC_TESTNET],
+        balances: [
+          nativeBalance({
+            chainId: ARC_TESTNET.chainId,
+            name: ARC_TESTNET.name,
+            symbol: "USDC",
+            balance: "378.263571",
+          }),
+        ],
+        supportedTokenBalances: [
+          supportedTokenBalance({
+            chainId: ARC_TESTNET.chainId,
+            balance: "0",
+          }),
+        ],
       })
     );
     expect(assets).toHaveLength(1);

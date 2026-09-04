@@ -1,9 +1,10 @@
-// TEMPO uses stablecoins for gas, so we display stablecoins only (no native token)
-const TEMPO_CHAIN_IDS: ReadonlySet<number> = new Set([42_431, 4217]);
-
-// Single source of truth for which chains can have their native balance
-// mirrored by a supported-token row -- see lib/wallet/build-withdrawable-assets.ts.
-export { nativeMirrorsSupportedToken } from "@/lib/wallet/build-withdrawable-assets";
+// Single source of truth for Tempo's categorical no-native-row rule and for
+// which chains can have their native balance mirrored by a supported-token
+// row -- see lib/wallet/build-withdrawable-assets.ts.
+export {
+  isTempoChain,
+  nativeMirrorsSupportedToken,
+} from "@/lib/wallet/build-withdrawable-assets";
 
 // Chains whose token lineup doesn't mirror Ethereum mainnet's stablecoin set
 // (e.g. Plasma ships USDT0, no Circle USDC, no Sky USDS). For these chains we
@@ -15,10 +16,6 @@ const INDEPENDENT_TOKEN_LIST_CHAIN_IDS: ReadonlySet<number> = new Set([
 ]);
 
 export const MAINNET_CHAIN_ID = 1;
-
-export function isTempoChain(chainId: number): boolean {
-  return TEMPO_CHAIN_IDS.has(chainId);
-}
 
 export function hasIndependentTokenList(chainId: number): boolean {
   return INDEPENDENT_TOKEN_LIST_CHAIN_IDS.has(chainId);
