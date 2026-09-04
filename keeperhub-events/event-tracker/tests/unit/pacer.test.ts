@@ -78,34 +78,47 @@ describe("TokenBucketPacer", () => {
 
   it("stops pacing once the shutdown signal aborts, releasing a parked take", async () => {
     const controller = new AbortController();
-    const drainRate = 10; // 1 token per 100ms
-    const pacer = new TokenBucketPacer(drainRate, undefined, controller.signal);
-    for (let i = 0; i < drainRate; i++) {
-      await pacer.take();
-    }
+    // 1 token/sec, capacity 1. A slow rate keeps the assertions honest: the
+    // single warm-up take cannot refill a meaningful fraction of a token, so
+    // the bucket is genuinely empty below and the test cannot pass by
+    // accident on a loaded runner.
+    const pacer = new TokenBucketPacer(1, 1, controller.signal);
+    await pacer.take();
 
-    // Bucket empty: this take would otherwise wait ~100ms for the next token.
-    const started = Date.now();
     const parked = pacer.take();
+    let settled = false;
+    parked.then(() => {
+      settled = true;
+    });
+
+    // Prove it is actually parked before aborting; otherwise this test would
+    // pass whether or not abort does anything.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(settled).toBe(false);
+
+    const started = Date.now();
     controller.abort();
     await parked;
-    expect(Date.now() - started).toBeLessThan(50);
+    expect(settled).toBe(true);
+    // Would have been ~1s of remaining pace.
+    expect(Date.now() - started).toBeLessThan(200);
   });
 
   it("keeps letting takes through after abort, so a whole backlog bursts", async () => {
     const controller = new AbortController();
-    const pacer = new TokenBucketPacer(10, undefined, controller.signal);
-    for (let i = 0; i < 10; i++) {
-      await pacer.take();
-    }
+    const pacer = new TokenBucketPacer(1, 1, controller.signal);
+    await pacer.take();
     controller.abort();
 
-    // 100 events at 10/s would be 10s of pacing. After abort they cost nothing:
-    // the drain that follows pays for the sends, not for the remaining pace.
+    // At 1 token/sec these 100 takes would be ~100s of pacing. After abort
+    // they cost nothing: the drain that follows pays for the sends, not for
+    // the remaining pace. The bound is deliberately loose - two orders of
+    // magnitude below the paced cost is proof enough, and a tight floor
+    // would only buy flakes on a loaded runner.
     const started = Date.now();
     for (let i = 0; i < 100; i++) {
       await pacer.take();
     }
-    expect(Date.now() - started).toBeLessThan(100);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

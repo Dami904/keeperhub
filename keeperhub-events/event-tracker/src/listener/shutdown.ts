@@ -12,13 +12,21 @@
  * How long `stopAll` waits for in-flight handlers before giving up and
  * letting the process exit.
  *
- * Mirrors `SHUTDOWN_TIMEOUT_MS` in `lib/workflow/executor/runner-constants.ts`
- * (25s inside the K8s 30s default grace period), duplicated because this
- * package cannot import from the root context. The buffer matters: a drain
- * that outlives the grace period is SIGKILLed with nothing logged, which is
- * the failure this drain exists to remove.
+ * Sized against the 30s K8s default grace period, not copied from the
+ * executor's 25s: this process still has to tear down the provider manager
+ * (a WSS close per chain) and the health server after the drain returns, and
+ * a drain that outlives the grace period is SIGKILLed with nothing logged -
+ * the exact failure this drain exists to remove.
+ *
+ * 20s is chosen to cover one dispatch stuck on the internal API. A
+ * `createPhantomExecution` that gets no answer spends 3 attempts at
+ * `REQUEST_TIMEOUT_MS = 5_000` plus `RETRY_DELAYS_MS = [500, 1_000]` before
+ * giving up - 16.5s (`lib/phantom.ts`). Nothing under the grace period can
+ * also cover the send-failure path, where `failPhantomExecution` runs the
+ * same ladder again; that case times out and is logged, which is the
+ * designed outcome rather than a gap.
  */
-export const SHUTDOWN_DRAIN_TIMEOUT_MS = 25_000;
+export const SHUTDOWN_DRAIN_TIMEOUT_MS = 20_000;
 
 /**
  * Sleeps for `ms`, or returns early when `signal` aborts.
