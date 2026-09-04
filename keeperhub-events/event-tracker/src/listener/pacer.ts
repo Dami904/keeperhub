@@ -1,3 +1,5 @@
+import { abortableSleep } from "./shutdown";
+
 /**
  * Per-chain token bucket used to pace event dispatch to SQS.
  *
@@ -34,14 +36,22 @@ export class TokenBucketPacer {
   private readonly maxTokens: number;
   private readonly refillPerMs: number;
   private lastRefill: number;
+  private readonly signal?: AbortSignal;
 
   /**
    * @param drainRate - tokens (events) released per second when contended.
    * @param capacity - maximum burst the bucket holds. Defaults to the drain
    *   rate so a single event never waits (it takes one of the available
    *   tokens) while a burst is still smoothed to the configured rate.
+   * @param signal - shutdown signal. Once aborted the bucket stops pacing
+   *   and every `take()` returns immediately, parked callers included. See
+   *   `release` below.
    */
-  constructor(drainRate: number, capacity: number = drainRate) {
+  constructor(
+    drainRate: number,
+    capacity: number = drainRate,
+    signal?: AbortSignal,
+  ) {
     if (!Number.isFinite(drainRate) || drainRate <= 0) {
       throw new Error(
         `TokenBucketPacer: drainRate must be > 0, got ${drainRate}`,
@@ -56,6 +66,7 @@ export class TokenBucketPacer {
     this.maxTokens = capacity;
     this.refillPerMs = drainRate / 1000;
     this.lastRefill = Date.now();
+    this.signal = signal;
   }
 
   /**
@@ -69,6 +80,17 @@ export class TokenBucketPacer {
    * large batch, minus the unconditional mean.
    */
   async take(): Promise<void> {
+    // Release: once shutdown has begun the bucket stops pacing entirely.
+    // Waiting out the drain rate is not an option there - the drain that
+    // follows has a fixed budget (SHUTDOWN_DRAIN_TIMEOUT_MS) and covers only
+    // `budget * drainRate` events, so a burst larger than that would have its
+    // tail killed at exit with no row, no queue entry and no replay. Bursting
+    // the backlog into SQS instead makes the drain cost the dispatch, not the
+    // pacing, and SQS absorbs the burst.
+    if (this.signal?.aborted) {
+      return;
+    }
+
     // Refill from wall-clock so contention state survives between calls and
     // is shared correctly across listeners on the same chain.
     const now = Date.now();
@@ -90,7 +112,7 @@ export class TokenBucketPacer {
     // refills from the new wall-clock and consumes). Bounded by the drain
     // rate, never unbounded.
     const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 1000)));
+    await abortableSleep(Math.min(waitMs, 1000), this.signal);
     await this.take();
   }
 }

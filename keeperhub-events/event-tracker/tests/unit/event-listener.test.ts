@@ -518,6 +518,39 @@ describe("EventListener", () => {
       expect(sqs.send.mock.calls.length).toBe(11);
     });
 
+    it("releases a jittered dispatch immediately when shutdown aborts", async () => {
+      const providerMock = makeProviderManagerMock();
+      const sqs = makeSqsMock();
+      const controller = new AbortController();
+      const listener = new EventListener(
+        buildOptions({
+          providerManager: providerMock.manager,
+          sqs,
+          // No pacer: this is the legacy jitter branch, which is what the
+          // deployed tracker runs until this PR's pacer reaches it.
+          jitterMs: 10_000,
+          shutdownSignal: controller.signal,
+        }),
+      );
+      await listener.start();
+
+      const started = Date.now();
+      const dispatch = providerMock.capturedHandler!(
+        makeLog({
+          txHash: `0x${"c".repeat(64)}`,
+          sender: SENDER,
+          value: 1n,
+        }),
+      );
+      controller.abort();
+      await dispatch;
+
+      // Abort forwards the event now rather than cancelling it: the send
+      // still happens, it just does not wait out the remaining jitter.
+      expect(sqs.send).toHaveBeenCalledTimes(1);
+      expect(Date.now() - started).toBeLessThan(500);
+    });
+
     it("applies jitter up to the configured cap before forwarding", async () => {
       const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
       vi.useFakeTimers();

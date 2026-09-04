@@ -75,4 +75,37 @@ describe("TokenBucketPacer", () => {
     expect(() => new TokenBucketPacer(0)).toThrow(/drainRate/);
     expect(() => new TokenBucketPacer(-5)).toThrow(/drainRate/);
   });
+
+  it("stops pacing once the shutdown signal aborts, releasing a parked take", async () => {
+    const controller = new AbortController();
+    const drainRate = 10; // 1 token per 100ms
+    const pacer = new TokenBucketPacer(drainRate, undefined, controller.signal);
+    for (let i = 0; i < drainRate; i++) {
+      await pacer.take();
+    }
+
+    // Bucket empty: this take would otherwise wait ~100ms for the next token.
+    const started = Date.now();
+    const parked = pacer.take();
+    controller.abort();
+    await parked;
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it("keeps letting takes through after abort, so a whole backlog bursts", async () => {
+    const controller = new AbortController();
+    const pacer = new TokenBucketPacer(10, undefined, controller.signal);
+    for (let i = 0; i < 10; i++) {
+      await pacer.take();
+    }
+    controller.abort();
+
+    // 100 events at 10/s would be 10s of pacing. After abort they cost nothing:
+    // the drain that follows pays for the sends, not for the remaining pace.
+    const started = Date.now();
+    for (let i = 0; i < 100; i++) {
+      await pacer.take();
+    }
+    expect(Date.now() - started).toBeLessThan(100);
+  });
 });

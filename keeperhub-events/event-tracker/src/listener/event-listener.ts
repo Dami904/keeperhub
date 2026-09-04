@@ -19,7 +19,9 @@ import type {
 import type { AbiEvent } from "../chains/validation";
 import type { DedupStore } from "./dedup";
 import { formatError } from "./format-error";
+import type { InFlightTracker } from "./in-flight";
 import type { TokenBucketPacer } from "./pacer";
+import { abortableSleep } from "./shutdown";
 
 /**
  * EventListener encapsulates a single workflow's contract-event listener.
@@ -107,6 +109,23 @@ export interface EventListenerOptions {
   pacer?: TokenBucketPacer;
 
   /**
+   * Optional registry-wide tracker for in-flight `onLog` promises. When set,
+   * every dispatch is registered with it so `ListenerRegistry.stopAll` can
+   * wait for handlers that are mid-flight at SIGTERM. Without it a parked or
+   * dispatching event dies with the process: it has no SQS message and no
+   * phantom row yet, and the provider manager keeps no cursor to replay it.
+   */
+  inFlight?: InFlightTracker;
+
+  /**
+   * Optional registry-wide shutdown signal. Once aborted the dispatch stops
+   * parking - both the pacer and the jitter below return immediately - so the
+   * drain that follows costs the dispatch rather than the remaining pace.
+   * Aborting does not cancel an event; it forwards it now.
+   */
+  shutdownSignal?: AbortSignal;
+
+  /**
    * Maximum jitter applied before forwarding a matched event to SQS.
    * Spreads downstream load when many events fire simultaneously. Tests
    * should pass 0 to keep runs deterministic.
@@ -155,7 +174,14 @@ export class EventListener {
       fallbackWssUrl: this.opts.fallbackWssUrl,
       address: this.opts.contractAddress,
       topic0: eventFragment.topicHash,
-      handler: (log) => this.onLog(log),
+      // Registered with the tracker so shutdown can wait for it. `onLog`
+      // swallows its own errors, so the tracked promise never rejects.
+      handler: (log) => {
+        const dispatch = this.onLog(log);
+        return this.opts.inFlight
+          ? this.opts.inFlight.track(dispatch)
+          : dispatch;
+      },
     });
     this.started = true;
     logger.log(
@@ -220,7 +246,10 @@ export class EventListener {
       } else {
         const maxJitter = this.opts.jitterMs ?? DEFAULT_JITTER_MS;
         if (maxJitter > 0) {
-          await new Promise((r) => setTimeout(r, Math.random() * maxJitter));
+          await abortableSleep(
+            Math.random() * maxJitter,
+            this.opts.shutdownSignal,
+          );
         }
       }
 
