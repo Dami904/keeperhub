@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arc PR 2228 Cinematic</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --black: #050912;
+        --navy: #07172a;
+        --arc: #8fb6d6;
+        --white: #f6f8fc;
+        --muted: #95a8bd;
+        --line: rgba(180, 215, 245, 0.18);
+        --green: #22f29a;
+        --panel: rgba(7, 18, 32, 0.74);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 74% 18%, rgba(143, 182, 214, 0.18), transparent 24rem),
+          radial-gradient(circle at 16% 82%, rgba(34, 242, 154, 0.11), transparent 24rem),
+          linear-gradient(180deg, #02060d 0%, #07172a 58%, #08111d 100%);
+        color: var(--white);
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .app {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+        min-height: 720px;
+        overflow: hidden;
+        isolation: isolate;
+      }
+
+      .floor {
+        position: absolute;
+        left: -18vw;
+        right: -18vw;
+        bottom: -28vh;
+        height: 74vh;
+        background-image:
+          linear-gradient(rgba(143, 182, 214, 0.09) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(143, 182, 214, 0.09) 1px, transparent 1px);
+        background-size: 72px 72px;
+        transform: perspective(820px) rotateX(66deg);
+        transform-origin: center bottom;
+        mask-image: linear-gradient(transparent 0%, black 28%, black 100%);
+        animation: floorDrift 20s linear infinite;
+      }
+
+      .glow {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+        background:
+          linear-gradient(180deg, rgba(2, 6, 13, 0.7), transparent 38%),
+          linear-gradient(90deg, rgba(3, 8, 17, 0.86), transparent 38%, transparent 72%, rgba(3, 8, 17, 0.54));
+      }
+
+      .brand {
+        position: absolute;
+        top: 30px;
+        left: 34px;
+        z-index: 8;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .logo {
+        width: 64px;
+        height: 64px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: #08213b url("./assets/arc-logo.jpg") center / cover;
+        box-shadow: 0 0 34px rgba(143, 182, 214, 0.24);
+      }
+
+      .wordmark {
+        font-size: clamp(25px, 3vw, 46px);
+        line-height: 1;
+        font-weight: 820;
+        letter-spacing: 0;
+      }
+
+      .wordmark span {
+        color: var(--green);
+      }
+
+      .scene-label {
+        position: absolute;
+        top: 38px;
+        right: 34px;
+        z-index: 8;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .copy {
+        position: absolute;
+        top: 122px;
+        left: 34px;
+        z-index: 7;
+        width: min(680px, calc(100vw - 68px));
+      }
+
+      h1,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(34px, 3.8vw + 2.5vh, 84px);
+        line-height: 0.98;
+        font-weight: 850;
+        letter-spacing: 0;
+      }
+
+      .accent {
+        color: var(--green);
+      }
+
+      .body {
+        max-width: 620px;
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: clamp(15px, 1.35vw, 20px);
+        line-height: 1.55;
+      }
+
+      .stage {
+        position: absolute;
+        inset: 19vh 0 12vh;
+        z-index: 4;
+        perspective: 1200px;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        transform: translateY(26px);
+        transition:
+          opacity 520ms ease,
+          transform 720ms cubic-bezier(0.22, 0.72, 0.16, 1);
+        pointer-events: none;
+      }
+
+      .scene.active {
+        opacity: 1;
+        transform: translateY(0);
+        pointer-events: auto;
+      }
+
+      .world {
+        position: absolute;
+        left: 48%;
+        top: 50%;
+        width: min(680px, 48vw);
+        height: min(470px, 42vw);
+        transform: translate(-50%, -42%) rotateX(57deg) rotateZ(-8deg);
+        transform-style: preserve-3d;
+      }
+
+      .arc-gate {
+        position: absolute;
+        inset: 7% 14% 13%;
+        transform-style: preserve-3d;
+        animation: breathe 5s ease-in-out infinite;
+      }
+
+      .arc-gate::before {
+        content: "";
+        position: absolute;
+        left: 11%;
+        right: 11%;
+        top: 0;
+        height: 82%;
+        border: clamp(32px, 4.2vw, 58px) solid transparent;
+        border-bottom: 0;
+        border-radius: 50% 50% 0 0 / 82% 82% 0 0;
+        background: linear-gradient(135deg, #f7fbff, #88a8c4 58%, #486074) border-box;
+        mask:
+          linear-gradient(#000 0 0) padding-box,
+          linear-gradient(#000 0 0);
+        mask-composite: exclude;
+        box-shadow:
+          0 0 44px rgba(143, 182, 214, 0.36),
+          36px 42px 0 rgba(0, 0, 0, 0.18);
+      }
+
+      .arc-gate::after {
+        content: "";
+        position: absolute;
+        left: 46%;
+        top: 54%;
+        width: 34%;
+        height: 15%;
+        background: linear-gradient(90deg, #d9e5ef, #819bb1);
+        transform: skewX(-6deg);
+        box-shadow:
+          0 0 28px rgba(143, 182, 214, 0.28),
+          18px 20px 0 rgba(0, 0, 0, 0.2);
+      }
+
+      .chain-line {
+        position: absolute;
+        left: 2%;
+        right: 2%;
+        top: 64%;
+        height: 4px;
+        background: linear-gradient(90deg, transparent, rgba(34, 242, 154, 0.86), transparent);
+        transform: translateZ(38px);
+        box-shadow: 0 0 28px rgba(34, 242, 154, 0.34);
+      }
+
+      .node {
+        position: absolute;
+        width: clamp(78px, 8vw, 126px);
+        aspect-ratio: 1;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        color: var(--white);
+        font-weight: 850;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        box-shadow:
+          0 0 34px rgba(143, 182, 214, 0.28),
+          22px 24px 0 rgba(0, 0, 0, 0.18);
+        transform-style: preserve-3d;
+      }
+
+      .node.native {
+        left: 3%;
+        top: 52%;
+        background: radial-gradient(circle at 34% 28%, #d9ecff, #356b95);
+      }
+
+      .node.token {
+        right: 3%;
+        top: 52%;
+        background: radial-gradient(circle at 34% 28%, #d6ffe9, #0e8d5b);
+      }
+
+      .node.single {
+        left: 50%;
+        top: 55%;
+        transform: translateX(-50%) translateZ(80px);
+        background: radial-gradient(circle at 34% 28%, #fff1c2, #a76d13);
+      }
+
+      .node small {
+        display: block;
+        margin-top: 3px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .commit-stack {
+        position: absolute;
+        right: 10%;
+        top: 16%;
+        width: min(250px, 18vw);
+        transform: rotateY(-18deg) translateZ(72px);
+      }
+
+      .commit {
+        height: 42px;
+        margin-bottom: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(7, 18, 32, 0.72);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        color: #dce8f4;
+        font-size: 13px;
+        box-shadow: 14px 16px 0 rgba(0, 0, 0, 0.12);
+      }
+
+      .commit::before {
+        content: "";
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 18px rgba(34, 242, 154, 0.62);
+        flex: 0 0 auto;
+      }
+
+      .evidence {
+        position: absolute;
+        right: clamp(34px, 5vw, 86px);
+        bottom: clamp(78px, 9vh, 118px);
+        z-index: 6;
+        width: min(410px, 28vw);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(18px);
+        transition:
+          opacity 440ms ease,
+          transform 540ms cubic-bezier(0.22, 0.72, 0.16, 1);
+      }
+
+      .evidence.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .evidence img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        object-fit: cover;
+        object-position: center top;
+      }
+
+      .evidence p {
+        padding: 12px 14px 14px;
+        color: #dbe6f2;
+        font-size: 13px;
+        line-height: 1.42;
+      }
+
+      .quote {
+        position: absolute;
+        left: 34px;
+        bottom: 106px;
+        z-index: 7;
+        width: min(620px, calc(100vw - 68px));
+        border-left: 3px solid var(--green);
+        padding-left: 18px;
+        color: #dce8f4;
+        font-size: clamp(15px, 1.2vw, 18px);
+        line-height: 1.45;
+      }
+
+      .quote b {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--green);
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .controls {
+        position: absolute;
+        left: 34px;
+        bottom: 32px;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .control {
+        width: 42px;
+        height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(7, 18, 32, 0.72);
+        color: var(--white);
+        cursor: pointer;
+      }
+
+      .control:hover {
+        border-color: rgba(34, 242, 154, 0.72);
+      }
+
+      .dots {
+        display: flex;
+        gap: 9px;
+        margin-left: 8px;
+      }
+
+      .dot {
+        width: 38px;
+        height: 4px;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.2);
+        padding: 0;
+        cursor: pointer;
+      }
+
+      .dot.active {
+        background: var(--green);
+        box-shadow: 0 0 18px rgba(34, 242, 154, 0.42);
+      }
+
+      @keyframes floorDrift {
+        from {
+          background-position: 0 0;
+        }
+        to {
+          background-position: 72px 72px;
+        }
+      }
+
+      @keyframes breathe {
+        0%,
+        100% {
+          transform: translateZ(0) scale(1);
+        }
+        50% {
+          transform: translateZ(34px) scale(1.018);
+        }
+      }
+
+      @media (max-width: 980px) {
+        body {
+          overflow: auto;
+        }
+
+        .app {
+          min-height: 980px;
+        }
+
+        .scene-label {
+          display: none;
+        }
+
+        .copy {
+          top: 116px;
+        }
+
+        .stage {
+          inset: 34vh 0 20vh;
+        }
+
+        .world {
+          left: 50%;
+          width: min(580px, 92vw);
+          height: min(430px, 70vw);
+        }
+
+        .evidence {
+          right: 18px;
+          left: 18px;
+          bottom: 118px;
+          width: auto;
+        }
+
+        .quote {
+          bottom: 230px;
+          font-size: 14px;
+        }
+
+        .commit-stack {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <div class="floor"></div>
+      <div class="glow"></div>
+
+      <header class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div class="wordmark">Arc <span>PR 2228</span></div>
+      </header>
+
+      <div class="scene-label" id="sceneLabel">01 / Chain support</div>
+
+      <section class="copy">
+        <h1 id="headline">Arc enters the wallet.</h1>
+        <p class="body" id="bodyCopy">
+          Mainnet and testnet support, seeded USDC, live RPC/WSS endpoints, and explorer links move through review as one focused wallet upgrade.
+        </p>
+      </section>
+
+      <section class="stage" aria-label="Cinematic PR illustration">
+        <article class="scene active" data-scene="0">
+          <div class="world">
+            <div class="arc-gate"></div>
+            <div class="chain-line"></div>
+            <div class="commit-stack">
+              <div class="commit">seed chains</div>
+              <div class="commit">seed USDC</div>
+              <div class="commit">RPC + WSS</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="1">
+          <div class="world">
+            <div class="arc-gate"></div>
+            <div class="chain-line"></div>
+            <div class="node native">18<small>native</small></div>
+            <div class="node token">6<small>token</small></div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="2">
+          <div class="world">
+            <div class="arc-gate"></div>
+            <div class="chain-line"></div>
+            <div class="node single">USDC<small>one row</small></div>
+            <div class="commit-stack">
+              <div class="commit">funded row hides native</div>
+              <div class="commit">placeholder keeps native</div>
+              <div class="commit">address-only rows fixed</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="3">
+          <div class="world">
+            <div class="arc-gate"></div>
+            <div class="chain-line"></div>
+            <div class="node single">LIVE<small>Sep 16</small></div>
+            <div class="commit-stack">
+              <div class="commit">rpc.mainnet.arc.io</div>
+              <div class="commit">fallback RPC</div>
+              <div class="commit">explorer links</div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <aside class="evidence" id="evidence">
+        <img id="evidenceImage" src="./assets/00-before-double-counted.png" alt="Arc wallet evidence" />
+        <p id="evidenceCopy">Before the fix, Arc Testnet showed native USDC and token USDC as two separate balances.</p>
+      </aside>
+
+      <aside class="quote">
+        <b id="quoteAuthor">Reviewer thread</b>
+        <span id="quoteText">The PR is about shipping Arc support without letting the same USDC balance appear twice.</span>
+      </aside>
+
+      <nav class="controls" aria-label="Demo controls">
+        <button class="control" id="prevBtn" type="button" aria-label="Previous scene">‹</button>
+        <button class="control" id="playBtn" type="button" aria-label="Pause or play">Ⅱ</button>
+        <button class="control" id="nextBtn" type="button" aria-label="Next scene">›</button>
+        <div class="dots" id="dots"></div>
+      </nav>
+    </main>
+
+    <script>
+      const scenes = [
+        {
+          label: "01 / Chain support",
+          headline: "Arc enters the wallet.",
+          body: "Mainnet and testnet support, seeded USDC, live RPC/WSS endpoints, and explorer links move through review as one focused wallet upgrade.",
+          quoteAuthor: "Commit arc",
+          quote: "feat: #2230 add Arc mainnet and testnet to wallet with USDC",
+          evidence: "",
+          evidenceCopy: ""
+        },
+        {
+          label: "02 / Review pressure",
+          headline: "One balance was being seen twice.",
+          body: "Arc's native gas balance and the USDC token row represent the same money at different precisions. Review caught the double-count before it could ship.",
+          quoteAuthor: "suisuss",
+          quote: "The placeholder pair is the useful one: native stays visible and withdrawable while the token row reads 0.",
+          evidence: "./assets/00-before-double-counted.png",
+          evidenceCopy: "The original bug: two USDC rows on Arc Testnet, one native and one token contract row."
+        },
+        {
+          label: "03 / The fix",
+          headline: "Funded token hides native. Placeholder keeps it.",
+          body: "The dedupe guard now matches the Arc USDC precompile address, checks for a funded mirror row, and handles address-only token payloads.",
+          quoteAuthor: "joelorzet",
+          quote: "Use the same tokenAddress ?? address fallback there. A small helper keeps the next reader from having to notice this again.",
+          evidence: "./assets/02-placeholder-native-visible.png",
+          evidenceCopy: "A zero placeholder token does not hide the real native balance or the withdraw action."
+        },
+        {
+          label: "04 / Evidence and launch",
+          headline: "The PR is ready for the real chain.",
+          body: "Screenshots covered the chain card, toolbar digest, settings table, loading frame, Tempo, and EURC edge cases. Mainnet endpoints were rechecked after launch.",
+          quoteAuthor: "suisuss",
+          quote: "DevOps is configuring load-balanced RPC support for Arc testnet and mainnet. Shouldn't be long till this PR goes through.",
+          evidence: "./assets/05-loading-frame.png",
+          evidenceCopy: "Cold-open loading frame: spinner and Loading tokens state instead of stale or double-counted balances."
+        }
+      ];
+
+      const sceneEls = [...document.querySelectorAll(".scene")];
+      const label = document.getElementById("sceneLabel");
+      const headline = document.getElementById("headline");
+      const bodyCopy = document.getElementById("bodyCopy");
+      const quoteAuthor = document.getElementById("quoteAuthor");
+      const quoteText = document.getElementById("quoteText");
+      const evidence = document.getElementById("evidence");
+      const evidenceImage = document.getElementById("evidenceImage");
+      const evidenceCopy = document.getElementById("evidenceCopy");
+      const dots = document.getElementById("dots");
+      const prevBtn = document.getElementById("prevBtn");
+      const playBtn = document.getElementById("playBtn");
+      const nextBtn = document.getElementById("nextBtn");
+      let index = 0;
+      let playing = true;
+      let timer;
+
+      function renderDots() {
+        dots.innerHTML = "";
+        scenes.forEach((_, dotIndex) => {
+          const dot = document.createElement("button");
+          dot.className = "dot";
+          dot.type = "button";
+          dot.setAttribute("aria-label", `Scene ${dotIndex + 1}`);
+          dot.addEventListener("click", () => {
+            playing = false;
+            playBtn.textContent = "▶";
+            setScene(dotIndex);
+          });
+          dots.appendChild(dot);
+        });
+      }
+
+      function setScene(next) {
+        index = (next + scenes.length) % scenes.length;
+        const data = scenes[index];
+        sceneEls.forEach((scene, sceneIndex) => {
+          scene.classList.toggle("active", sceneIndex === index);
+        });
+        [...dots.children].forEach((dot, dotIndex) => {
+          dot.classList.toggle("active", dotIndex === index);
+        });
+        label.textContent = data.label;
+        headline.innerHTML = data.headline.replace("Arc", '<span class="accent">Arc</span>');
+        bodyCopy.textContent = data.body;
+        quoteAuthor.textContent = data.quoteAuthor;
+        quoteText.textContent = data.quote;
+        if (data.evidence) {
+          evidenceImage.src = data.evidence;
+          evidenceCopy.textContent = data.evidenceCopy;
+          evidence.classList.add("visible");
+        } else {
+          evidence.classList.remove("visible");
+        }
+        restartTimer();
+      }
+
+      function restartTimer() {
+        window.clearTimeout(timer);
+        if (!playing) {
+          return;
+        }
+        timer = window.setTimeout(() => setScene(index + 1), 7000);
+      }
+
+      prevBtn.addEventListener("click", () => {
+        playing = false;
+        playBtn.textContent = "▶";
+        setScene(index - 1);
+      });
+
+      nextBtn.addEventListener("click", () => {
+        playing = false;
+        playBtn.textContent = "▶";
+        setScene(index + 1);
+      });
+
+      playBtn.addEventListener("click", () => {
+        playing = !playing;
+        playBtn.textContent = playing ? "Ⅱ" : "▶";
+        restartTimer();
+      });
+
+      renderDots();
+      setScene(0);
+    </script>
+  </body>
+</html>
